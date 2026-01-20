@@ -147,7 +147,7 @@ class CalculateFeatureMatrixes():
 
         self.verbose = verbose
 
-        self.stocks_df = pd.read_csv('D:\Option Data\stocks.csv')
+        self.stocks_df = pd.read_csv(r'D:\Option Data\stocks.csv')
         self.stocks_df['DlyCalDt'] = pd.to_datetime(self.stocks_df['DlyCalDt']).dt.normalize()
         self.stocks_df['Ticker'] = self.stocks_df['Ticker'].astype(str).str.strip().str.upper() # Standardize the string name to ensure correct merges
         self.stocks_df = self.stocks_df.drop_duplicates(subset=['DlyCalDt', 'Ticker'], keep='first')
@@ -652,42 +652,185 @@ class CalculateFeatureMatrixes():
 
 class FlattenFeatures():
 
-    def __init__(self):
-        self.abnormal_volume_call = pd.read_csv(r'D:\Option Data\feature_matrixes\abnormal_volume_call.csv', index_col =0)
-        self.abnormal_volume_put = pd.read_csv(r'D:\Option Data\feature_matrixes\abnormal_volume_put.csv', index_col =0)
-        self.after_market = pd.read_csv(r'D:\Option Data\feature_matrixes\after_market.csv', index_col =0)
-        self.atm_call_open_interest_ratio = pd.read_csv(r'D:\Option Data\feature_matrixes\atm_call_open_interest_ratio.csv', index_col =0)
-        self.atm_put_open_interest_ratio = pd.read_csv(r'D:\Option Data\feature_matrixes\atm_put_open_interest_ratio.csv', index_col = 0)
-        self.beta = pd.read_csv(r'D:\Option Data\feature_matrixes\beta.csv', index_col = 0)
-        self.call_put_ratio = pd.read_csv(r'D:\Option Data\feature_matrixes\call_put_ratio.csv', index_col = 0)
-        self.day_of_week = pd.read_csv(r'D:\Option Data\feature_matrixes\day_of_week.csv', index_col = 0)
-        self.implied_kurt_change = pd.read_csv(r'D:\Option Data\feature_matrixes\implied_kurt_change.csv', index_col = 0)
-        self.implied_skew_change = pd.read_csv(r'D:\Option Data\feature_matrixes\implied_skew_change.csv', index_col = 0)
-        self.implied_move = pd.read_csv(r'D:\Option Data\feature_matrixes\implied_move.csv', index_col = 0)
-        self.implied_vol = pd.read_csv(r'D:\Option Data\feature_matrixes\implied_vol.csv', index_col = 0)
-        self.iv_slope = pd.read_csv(r'D:\Option Data\feature_matrixes\iv_slope.csv', index_col = 0)
-        self.log_market_cap = pd.read_csv(r'D:\Option Data\feature_matrixes\log_market_cap.csv', index_col = 0)
-        self.realized_move_pct = pd.read_csv(r'D:\Option Data\feature_matrixes\realized_move_pct.csv', index_col = 0)
-        self.realized_move_pct_abs = pd.read_csv(r'D:\Option Data\feature_matrixes\realized_move_pct_abs.csv', index_col = 0)
-        self.vix_ = pd.read_csv(r'D:\Option Data\feature_matrixes\vix.csv', index_col = 0)
-        self.date = pd.read_csv(r'D:\Option Data\feature_matrixes\date.csv', index_col = 0, dtype=object)
-        self.pnl_bid_ask_df = pd.read_csv(r'D:\Option Data\feature_matrixes\pnl_bid_ask_backtest.csv', index_col = 0)
-        self.pnl_realistic_df = pd.read_csv(r'D:\Option Data\feature_matrixes\pnl_realistic_backtest.csv', index_col = 0)
+    def __init__(self, verbose = False):
+        self.abnormal_volume_call = pd.read_csv(r'D:\Option Data\feature_matrixes\abnormal_volume_call.csv', index_col =0) if os.path.exists(r'D:\Option Data\feature_matrixes\abnormal_volume_call.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\abnormal_volume_call.csv', index_col =0)
+        self.abnormal_volume_put = pd.read_csv(r'D:\Option Data\feature_matrixes\abnormal_volume_put.csv', index_col =0) if os.path.exists(r'D:\Option Data\feature_matrixes\abnormal_volume_put.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\abnormal_volume_put.csv', index_col =0)
+        self.after_market = pd.read_csv(r'D:\Option Data\feature_matrixes\after_market.csv', index_col =0) if os.path.exists(r'D:\Option Data\feature_matrixes\after_market.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\after_market.csv', index_col =0)
+        self.atm_call_open_interest_ratio = pd.read_csv(r'D:\Option Data\feature_matrixes\atm_call_open_interest_ratio.csv', index_col =0) if os.path.exists(r'D:\Option Data\feature_matrixes\atm_call_open_interest_ratio.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\atm_call_open_interest_ratio.csv', index_col =0)
+        self.atm_put_open_interest_ratio = pd.read_csv(r'D:\Option Data\feature_matrixes\atm_put_open_interest_ratio.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\atm_put_open_interest_ratio.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\atm_put_open_interest_ratio.csv', index_col =0)
+        self.beta = pd.read_csv(r'D:\Option Data\feature_matrixes\beta.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\beta.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\beta.csv', index_col =0)
+        self.call_put_ratio = pd.read_csv(r'D:\Option Data\feature_matrixes\call_put_ratio.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\call_put_ratio.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\call_put_ratio.csv', index_col =0)
+        self.day_of_week = pd.read_csv(r'D:\Option Data\feature_matrixes\day_of_week.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\day_of_week.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\day_of_week.csv', index_col =0)
+        self.implied_kurt_change = pd.read_csv(r'D:\Option Data\feature_matrixes\implied_kurt_change.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\implied_kurt_change.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\implied_kurt_change.csv', index_col =0)
+        self.implied_skew_change = pd.read_csv(r'D:\Option Data\feature_matrixes\implied_skew_change.csv', index_col = 0)  if os.path.exists(r'D:\Option Data\feature_matrixes\implied_skew_change.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\implied_skew_change.csv', index_col =0)
+        self.implied_move = pd.read_csv(r'D:\Option Data\feature_matrixes\implied_move.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\implied_move.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\implied_move.csv', index_col =0)
+        self.implied_vol = pd.read_csv(r'D:\Option Data\feature_matrixes\implied_vol.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\implied_vol.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\implied_vol.csv', index_col =0)
+        self.iv_slope = pd.read_csv(r'D:\Option Data\feature_matrixes\iv_slope.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\iv_slope.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\iv_slope.csv', index_col =0)
+        self.log_market_cap = pd.read_csv(r'D:\Option Data\feature_matrixes\log_market_cap.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\log_market_cap.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\log_market_cap.csv', index_col =0)
+        self.realized_move_pct = pd.read_csv(r'D:\Option Data\feature_matrixes\realized_move_pct.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\realized_move_pct.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\realized_move_pct.csv', index_col =0)
+        self.realized_move_pct_abs = pd.read_csv(r'D:\Option Data\feature_matrixes\realized_move_pct_abs.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\realized_move_pct_abs.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\realized_move_pct_abs.csv', index_col =0)
+        self.vix_ = pd.read_csv(r'D:\Option Data\feature_matrixes\vix.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\vix.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\vix.csv', index_col =0)
+        self.date = pd.read_csv(r'D:\Option Data\feature_matrixes\date.csv', index_col = 0, dtype=object) if os.path.exists(r'D:\Option Data\feature_matrixes\date.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\date.csv', index_col =0)
+        self.pnl_bid_ask = pd.read_csv(r'D:\Option Data\feature_matrixes\pnl_bid_ask_backtest.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\pnl_bid_ask_backtest.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\pnl_bid_ask_backtest.csv', index_col =0)
+        self.pnl_realistic = pd.read_csv(r'D:\Option Data\feature_matrixes\pnl_realistic_backtest.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\pnl_realistic_backtest.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\pnl_realistic_backtest.csv', index_col =0)
         
 
-        self.df_X = pd.DataFrame(columns=['Ticker', 'Q-String','Abnormal Volume Call', 'Abnormal Volume Put', 'After Market', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Day Of Week', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'Date'])
+        self.df_X = pd.DataFrame( columns= ['Ticker', 'Q-String', 'Date','Abnormal Volume Call', 'Abnormal Volume Put', 'After Market', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Day Of Week', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix'])
         self.df_X_auxiliary = pd.DataFrame(columns = ['Ticker', 'Q-String', 'Realized Move Pct', 'Realized Move Pct Abs', 'PNL Bid-Ask', 'PNL Realistic'])
+        self.df_y = pd.DataFrame(columns = ['Ticker', 'Q-String', 'Realized Move Pct', 'Realized Move Pct Abs'])
+
+        self.verbose = verbose
+
+        # Create buffers before the loop to speed up the creation of the flattened dfs
+        rows_X = []
+        rows_X_auxiliary = []
+        rows_y = []
 
 
+        company_dic = { f'{t}': None for t in self.date.index.tolist()}
+
+        # This will build the initial flattened X and y
         for index, row in self.date.iterrows():
 
             for col in self.date.columns:
-                print(row[col])
-                print(f'Index is {index}, col is {col}')
+                date_event = row[col]
 
+                if pd.isna(date_event):
+                    continue
+
+                #print(f'Index is {index}, col is {col}')
+
+                # Extract all the values from the feature matrixes for the current ticker and quarter
+                abnormal_volume_call_ = self.abnormal_volume_call.loc[index, col]
+                abnormal_volume_put_ = self.abnormal_volume_put.loc[index, col]
+                after_market_ = self.after_market.loc[index, col]
+                atm_call_open_interest_ratio_ = self.atm_call_open_interest_ratio.loc[index, col]
+                atm_put_open_interest_ratio_ = self.atm_put_open_interest_ratio.loc[index, col]
+                beta_ = self.beta.loc[index, col]
+                call_put_ratio_ = self.call_put_ratio.loc[index, col]
+                day_of_week_ = self.day_of_week.loc[index, col]
+                implied_kurt_change_ = self.implied_kurt_change.loc[index, col]
+                implied_skew_change_ = self.implied_skew_change.loc[index, col]
+                implied_move_ = self.implied_move.loc[index,col]
+                implied_vol_ = self.implied_vol.loc[index, col]
+                iv_slope_ = self.iv_slope.loc[index, col]
+                log_market_cap_ = self.log_market_cap.loc[index, col]
+                realized_move_pct_ = self.realized_move_pct.loc[index, col]
+                realized_move_pct_abs_ = self.realized_move_pct_abs.loc[index, col]
+                vix_value = self.vix_.loc[index, col]
+                pnl_bid_ask_ = self.pnl_bid_ask.loc[index, col]
+                pnl_realistic_ = self.pnl_realistic.loc[index, col]
+
+                # Create the new row as a DataFrame that will be appended to the end of the flattened dataframe
+                new_df_X_row = [index, col, date_event, abnormal_volume_call_, abnormal_volume_put_, after_market_, atm_call_open_interest_ratio_, atm_put_open_interest_ratio_, beta_, call_put_ratio_, day_of_week_, implied_kurt_change_, implied_skew_change_, implied_move_, implied_vol_, iv_slope_, log_market_cap_, vix_value]
+                new_df_X_row = pd.DataFrame([new_df_X_row], columns = self.df_X.columns)
+                rows_X.append(new_df_X_row.iloc[0])
+
+
+                new_df_X_auxiliary_row = [index, col, realized_move_pct_, realized_move_pct_abs_, pnl_bid_ask_, pnl_realistic_]
+                new_df_X_auxiliary_row = pd.DataFrame([new_df_X_auxiliary_row], columns = self.df_X_auxiliary.columns)
+                rows_X_auxiliary.append(new_df_X_auxiliary_row.iloc[0])
+
+                new_y_row = [index, col, realized_move_pct_, realized_move_pct_abs_]
+                new_y_row = pd.DataFrame([new_y_row], columns = self.df_y.columns)
+                rows_y.append(new_y_row.iloc[0])
+
+
+        # This here populates the X, X_auxiliary and y dataframes 
+        self.df_X = pd.DataFrame(rows_X, columns=self.df_X.columns)
+        self.df_X_auxiliary = pd.DataFrame(rows_X_auxiliary, columns=self.df_X_auxiliary.columns)
+        self.df_y = pd.DataFrame(rows_y, columns=self.df_y.columns)
+
+
+        # Create references for the quarters so that we can calculate the lookback features
+        self.df_X['Quarter'] = pd.PeriodIndex(self.df_X["Q-String"], freq="Q")
+        self.df_X['Previous Quarter'] = self.df_X['Quarter'] - 1
+        self.df_X['Quarter 2 Ago'] = self.df_X['Quarter'] - 2
+        self.df_X['Starting Quarter 2 Years Ago'] = self.df_X['Previous Quarter'] - 8
+
+        self.df_X_auxiliary['Quarter'] = pd.PeriodIndex(self.df_X_auxiliary["Q-String"], freq="Q")
+        self.df_X_auxiliary['Previous Quarter'] = self.df_X_auxiliary['Quarter'] - 1
+        self.df_X_auxiliary['Quarter 2 Ago'] = self.df_X_auxiliary['Quarter'] - 2
+        self.df_X_auxiliary['Starting Quarter 2 Years Ago'] = self.df_X_auxiliary['Previous Quarter'] - 8
+
+        self.df_y['Quarter'] = pd.PeriodIndex(self.df_y["Q-String"], freq="Q")
+        self.df_y['Previous Quarter'] = self.df_y['Quarter'] - 1
+        self.df_y['Quarter 2 Ago'] = self.df_y['Quarter'] - 2
+        self.df_y['Starting Quarter 2 Years Ago'] = self.df_y['Previous Quarter'] - 8      
+
+        pnl_bid_ask_8_list = []
+        pnl_realistic_8_list = []
+        realized_move_pct_1_list = []
+        realized_move_pct_2_list = []
+        realized_move_pct_abs_1_list = []
+        realized_move_pct_abs_2_list = []
+
+
+
+        if self.verbose:
+            last_ticker = None
+
+        # The next step is to calculate the rolling measures such as average PNL over 8/16 earnings and realized move of the last 2 earnings events
+        for index, row in self.df_X.iterrows():
+
+            ticker = row['Ticker'] # Get the ticker
+
+            if self.verbose:
+                if ticker != last_ticker:
+                    last_ticker = ticker
+                    print(f'At ticker {ticker}')            
+
+            # Load up to 8 previous Earnings Events with information about the PNL of the Straddle as well as the Realized move
+            auxiliary_info = self.df_X_auxiliary[(self.df_X_auxiliary['Ticker'] == ticker) & (self.df_X_auxiliary['Quarter'] >= row['Starting Quarter 2 Years Ago']) & (self.df_X_auxiliary['Quarter'] <= row['Previous Quarter'])]
+
+            if auxiliary_info.empty: # If no previous events exist than we will add NA values         
+                pnl_bid_ask_8 = np.nan
+                pnl_realistic_8 = np.nan
+                realized_move_pct_1 = np.nan
+                realized_move_pct_2 = np.nan
+                realized_move_pct_abs_1 = np.nan
+                realized_move_pct_abs_2 = np.nan
+
+            # Get the values of the lagged variables 
+            pnl_bid_ask_8 = auxiliary_info['PNL Bid-Ask'].sum() / len(auxiliary_info)
+            pnl_realistic_8 = auxiliary_info['PNL Realistic'].sum() / len(auxiliary_info)
+            realized_move_pct_1 = auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]['Realized Move Pct'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]) == 1 else np.nan
+            realized_move_pct_2 = auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]['Realized Move Pct'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]) == 1 else np.nan
+            realized_move_pct_abs_1 = auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]['Realized Move Pct Abs'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]) == 1 else np.nan
+            realized_move_pct_abs_2 = auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]['Realized Move Pct Abs'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]) == 1 else np.nan
+
+            # Add the values of the lagged variables to the respective list so that we can add it to the X values
+            pnl_bid_ask_8_list.append(pnl_bid_ask_8)
+            pnl_realistic_8_list.append(pnl_realistic_8)
+            realized_move_pct_1_list.append(realized_move_pct_1)
+            realized_move_pct_2_list.append(realized_move_pct_2)
+            realized_move_pct_abs_1_list.append(realized_move_pct_abs_1)
+            realized_move_pct_abs_2_list.append(realized_move_pct_abs_2)
+
+        # Incorporate the lagged variables into the overall X matrix
+        self.df_X['PNL Bid Ask (8)'] = pnl_bid_ask_8_list
+        self.df_X['PNL Realistic (8)'] = pnl_realistic_8_list
+        self.df_X['Realized Move Pct (1)'] = realized_move_pct_1_list
+        self.df_X['Realized Move Pct (2)'] = realized_move_pct_2_list
+        self.df_X['Realized Move Pct Abs (1)'] = realized_move_pct_abs_1_list
+        self.df_X['Realized Move Pct Abs (2)'] = realized_move_pct_abs_2_list
+
+        # Now we start the next annoying process of formatting the X and y by dropping all observations before 2016
+        self.df_X.drop(['Quarter', 'Previous Quarter', 'Quarter 2 Ago', 'Starting Quarter 2 Years Ago'], axis = 'columns', inplace= True)
+        self.df_y.drop(['Quarter', 'Previous Quarter', 'Quarter 2 Ago', 'Starting Quarter 2 Years Ago'], axis = 'columns', inplace= True)
+        self.df_X['Date'] = pd.to_datetime(self.df_X['Date']).dt.normalize()
+        self.df_y['Date'] = self.df_X['Date'].values
+
+        self.df_X = self.df_X[self.df_X['Date'] >= '2016-01-01'].reset_index(drop = True)
+        self.df_y = self.df_y[self.df_y['Date'] >= '2016-01-01'].reset_index(drop = True)
+        self.df_X = self.df_X.replace([np.inf, -np.inf], np.nan) # There is some chance we end up with Inf or - Inf values therefore we want to replace them with np.nan
+
+
+        self.df_X.to_csv('X_1.csv', index = False)
+        self.df_y.to_csv('y_1.csv', index = False)
 
 if __name__ == '__main__':
     #PartionOptionData()
     #PreprocessOptionData()
     #CalculateFeatureMatrixes(verbose= False)
-    FlattenFeatures()
+    FlattenFeatures(verbose= True)
