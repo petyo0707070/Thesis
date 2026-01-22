@@ -2,19 +2,20 @@ from sklearn.preprocessing import RobustScaler
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
-from sklearn.preprocessing import QuantileTransformer,StandardScaler, PolynomialFeatures
+from sklearn.preprocessing import QuantileTransformer,StandardScaler, PolynomialFeatures, PowerTransformer, MinMaxScaler
 from scipy.stats import norm
+import os
 
 
 
 # This is a Pipeline for Scaling the data and dealing with entropy etc...
 class ScaleOptionData():
     def __init__(self, train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date = '2024-12-31'):
-        self.X = pd.read_csv(r'D:\Option Data\unscaled_features\X_1.csv')
-        self.y = pd.read_csv(r'D:\Option Data\unscaled_features\y_1.csv')
+        self.X = pd.read_csv(r'D:\Option Data\unscaled_features\X_1.csv') if os.path.exists(r'D:\Option Data\unscaled_features\X_1.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\X_1.csv')
+        self.y = pd.read_csv(r'D:\Option Data\unscaled_features\y_1.csv') if os.path.exists(r'D:\Option Data\unscaled_features\y_1.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\y_1.csv')
 
         self.class_column = 'Profitable Trade'
-        self.y['Profitable Trade'] = self.y['Bid Ask PNL'] >= 0.05
+        #self.y['Profitable Trade'] = self.y['Bid Ask PNL'] >= 0.05
 
         self.X.drop(['Realized Move Pct Abs (1)', 'Realized Move Pct Abs (2)'], axis = 'columns', inplace = True)
 
@@ -26,10 +27,33 @@ class ScaleOptionData():
         self.y_validation = self.y[self.y['Date'] <= validation_end_date].copy()
         self.y_test = self.y[self.y['Date'] <= test_end_date].copy()     
 
+        
         #Here we can invoke all the different transformations :)
-        self.X_train = self.thin_right_tail(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta'], 'log', 99)
+
+        # Remove the shittiest outliers
+        self.X_train = self.thin_right_tail(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put','Call Put Ratio', 'Kurt Delta', 'Skew Delta'], 'log', 99)
+
+        # Some columns have a theoretical reason / actually are remotely normally distributed, we make our life really easy by apply the Normal CDF
         self.X_train = self.apply_normal_scaler(self.X_train, ['Beta', 'Implied Move', 'Implied Vol', 'PNL Bid Ask (8)', 'PNL Realistic (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'])
-        self.X_train = self.apply_tail_transformation(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta'], 'hyperbolic')
+        
+        # Get rid of some shitty negative outliers
+        self.X_train = self.thin_left_tail(self.X_train, ['Kurt Delta', 'Skew Delta'], 'cubic_root', 1)
+
+
+        # Apply Power scaler for the heavily skewed positive distributions
+        self.X_train = self.apply_power_scaler(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put','ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'IV Slope', 'Vix', 'Call Put Ratio']) 
+        # Some of the resulting columns become Normally Distributed so we apply CDF to map them to [0, 1] -> [-1,1]
+        self.X_train = self.apply_normal_cdf(self.X_train, ['Call Put Ratio','Vix'])
+
+        # Apply Hyperbolic tangent transformation kiils a lot of the skewness but not always produces nicely uniformally distributed features
+        self.X_train = self.apply_tail_transformation(self.X_train, ['Kurt Delta', 'Skew Delta'], 'hyperbolic')
+        
+
+        # Use the min-max scaler to map the more nicely behaved features to [-1,1]
+        self.X_train = self.apply_min_max_scaler(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Call Put Ratio', 'Day Of Week','IV Slope', 'Log Market Cap', 'Call Put Ratio','Vix'])
+
+        print(self.y_train[self.class_column].value_counts(normalize= True))
+        
 
         self.explore_entropy()
 
@@ -37,7 +61,7 @@ class ScaleOptionData():
         for col in self.X_train.columns.tolist()[3:]:
 
             entropy = self.shannon_entropy(self.X_train[col], 20)
-            mututal_information = self.calculate_mutual_information(self.X_train[col], self.y_train[self.class_column], 20)
+            mututal_information = self.calculate_mutual_information(self.X_train[col], self.y_train['Realized Move Pct'], 20)
             plt.hist(self.X_train[col], bins=20, color='skyblue', edgecolor='black', alpha=0.7)
             plt.title(f'{col} Entropy: {round(entropy,3)}, Mutual Informativeness {round(mututal_information, 3)}')
             plt.show()
@@ -84,8 +108,7 @@ class ScaleOptionData():
         mi = h_x + h_y - h_xy
         
         # Return normalized MI (Optional: makes it 0 to 1 scale)
-        return max(0.0, mi)
-
+        return max(0.0, mi/h_y)
 
 
     def thin_right_tail(self, X, column_list, method_list, percentile_threshold = 95):
@@ -118,6 +141,27 @@ class ScaleOptionData():
         self.standard_scaler = StandardScaler()
         X[column_list] = self.standard_scaler.fit_transform(X[column_list])
         X[column_list] = norm.cdf(X[column_list])
+
+        for col in column_list:
+            X[col] = 2 * (X[col] - 0.5)
+
+        return X
+    
+    def apply_power_scaler(self, X, column_list):
+        self.power_scaler = PowerTransformer(method = 'yeo-johnson')
+        X[column_list] = self.power_scaler.fit_transform(X[column_list])
+        return X
+
+
+    def apply_min_max_scaler(self, X, column_list):
+        self.min_max_scaler = MinMaxScaler(feature_range= (-1,1))
+        X[column_list] = self.min_max_scaler.fit_transform(X[column_list])
+
+        return X
+
+    def apply_normal_cdf(self, X, column_list):
+        for col in column_list:
+            X[col] = norm.cdf(X[col])
 
         return X
 
@@ -160,5 +204,12 @@ class ScaleOptionData():
         
         return X_
 
+    def apply_iqr_scaler(self, X, column_list):
+        X = X.copy()
+
+        self.robust_scaler = RobustScaler()
+        X[column_list] = self.robust_scaler.fit_transform(X[column_list])
+
+        return X
 
 ScaleOptionData()
