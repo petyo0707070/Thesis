@@ -5,7 +5,7 @@ import matplotlib.pyplot as plt
 from sklearn.preprocessing import QuantileTransformer,StandardScaler, PolynomialFeatures, PowerTransformer, MinMaxScaler
 from scipy.stats import norm
 import os
-
+import sys
 
 
 # This is a Pipeline for Scaling the data and dealing with entropy etc...
@@ -13,6 +13,23 @@ class ScaleOptionData():
     def __init__(self, train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date = '2024-12-31'):
         self.X = pd.read_csv(r'D:\Option Data\unscaled_features\X_1.csv') if os.path.exists(r'D:\Option Data\unscaled_features\X_1.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\X_1.csv')
         self.y = pd.read_csv(r'D:\Option Data\unscaled_features\y_1.csv') if os.path.exists(r'D:\Option Data\unscaled_features\y_1.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\y_1.csv')
+
+        # Sort By ticker than date
+        self.X = self.X.sort_values(['Ticker', 'Date'])
+        self.y = self.y.loc[self.X.index]
+
+        self.X.reset_index(inplace = True, drop = True)
+        self.y.reset_index(inplace = True, drop = True)
+
+        self.right_tail_dic = {}
+        self.left_tail_dic = {}
+        self.tail_transformation_dic = {}
+
+        self.normal_scaler_columns = []
+        self.power_scaler_columns = []
+        self.min_max_scaler_columns = []
+        self.robust_scaler_columns = []
+        self.normal_cdf_columns = []
 
         self.class_column = 'Profitable Trade'
         #self.y['Profitable Trade'] = self.y['Bid Ask PNL'] >= 0.05
@@ -46,23 +63,29 @@ class ScaleOptionData():
         self.X_train = self.apply_normal_cdf(self.X_train, ['Call Put Ratio','Vix'])
 
         # Apply Hyperbolic tangent transformation kiils a lot of the skewness but not always produces nicely uniformally distributed features
-        self.X_train = self.apply_tail_transformation(self.X_train, ['Kurt Delta', 'Skew Delta'], 'hyperbolic')
+        self.X_train = self.apply_tail_transformation(self.X_train, ['Kurt Delta', 'Skew Delta'], 'logistic')
         
 
         # Use the min-max scaler to map the more nicely behaved features to [-1,1]
         self.X_train = self.apply_min_max_scaler(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Call Put Ratio', 'Day Of Week','IV Slope', 'Log Market Cap', 'Call Put Ratio','Vix'])
 
+        self.X_validation = self.transform_oos_data(self.X_validation)
+
+        X_train_tensor = self.transform_to_tensor(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'missing_column')
+
+
+        print(X_train_tensor)
         print(self.y_train[self.class_column].value_counts(normalize= True))
         
 
-        self.explore_entropy()
+        self.explore_entropy(self.X_train)
 
-    def explore_entropy(self):
-        for col in self.X_train.columns.tolist()[3:]:
+    def explore_entropy(self, X):
+        for col in X.columns.tolist()[3:]:
 
-            entropy = self.shannon_entropy(self.X_train[col], 20)
-            mututal_information = self.calculate_mutual_information(self.X_train[col], self.y_train['Realized Move Pct'], 20)
-            plt.hist(self.X_train[col], bins=20, color='skyblue', edgecolor='black', alpha=0.7)
+            entropy = self.shannon_entropy(X[col], 20)
+            mututal_information = self.calculate_mutual_information(X[col], self.y_train['Realized Move Pct'], 20)
+            plt.hist(X[col], bins=20, color='skyblue', edgecolor='black', alpha=0.7)
             plt.title(f'{col} Entropy: {round(entropy,3)}, Mutual Informativeness {round(mututal_information, 3)}')
             plt.show()
 
@@ -121,6 +144,10 @@ class ScaleOptionData():
 
             threshold_val = np.percentile(X_[column_list[i]], percentile_threshold)
 
+
+            self.right_tail_dic[column_list[i]] = {'threshold': threshold_val,
+                                                    'method': method_list[i]}
+
             mask = X_[column_list[i]] > threshold_val # We are taking the indexes of all the values which are to be changed i.e. above the threshold
                 
             if method_list[i] == 'square_root':
@@ -138,8 +165,9 @@ class ScaleOptionData():
 
     def apply_normal_scaler(self, X, column_list):
 
-        self.standard_scaler = StandardScaler()
-        X[column_list] = self.standard_scaler.fit_transform(X[column_list])
+        self.normal_scaler = StandardScaler()
+        self.normal_scaler_columns = column_list
+        X[column_list] = self.normal_scaler.fit_transform(X[column_list])
         X[column_list] = norm.cdf(X[column_list])
 
         for col in column_list:
@@ -149,17 +177,21 @@ class ScaleOptionData():
     
     def apply_power_scaler(self, X, column_list):
         self.power_scaler = PowerTransformer(method = 'yeo-johnson')
+        self.power_scaler_columns = column_list
         X[column_list] = self.power_scaler.fit_transform(X[column_list])
         return X
 
 
     def apply_min_max_scaler(self, X, column_list):
         self.min_max_scaler = MinMaxScaler(feature_range= (-1,1))
+        self.min_max_scaler_columns = column_list
         X[column_list] = self.min_max_scaler.fit_transform(X[column_list])
 
         return X
 
     def apply_normal_cdf(self, X, column_list):
+
+        self.normal_cdf_columns = column_list
         for col in column_list:
             X[col] = norm.cdf(X[col])
 
@@ -177,6 +209,11 @@ class ScaleOptionData():
 
             mask = X_[column_list[i]] < threshold_val # We are taking the indexes of all the values which are to be changed i.e. above the threshold
                 
+
+            self.left_tail_dic[column_list[i]] = {'threshold': threshold_val,
+                                                    'method': method_list[i]}
+
+
             if method_list[i] == 'square_root':
 
                 assert (X_.loc[mask, column_list[i]] >= 0).all(), f"Column {column_list[i]} contains negative values, cannot apply square root transformation."
@@ -194,6 +231,7 @@ class ScaleOptionData():
     def apply_tail_transformation(self, X, column_list, method = 'hyperbolic'):
         X_ = X.copy()
         for col in column_list:
+            self.tail_transformation_dic[col] = method
             if method == 'hyperbolic':
                 X_[col] = np.tanh(X_[col])
             elif method == 'logistic':
@@ -208,8 +246,126 @@ class ScaleOptionData():
         X = X.copy()
 
         self.robust_scaler = RobustScaler()
+        self.robust_scaler_columns = column_list
         X[column_list] = self.robust_scaler.fit_transform(X[column_list])
 
         return X
 
+    def transform_oos_data(self, X):
+
+        X_ = X.copy()
+        # Apply the right tail transformation
+        if len(self.right_tail_dic) > 0:
+            
+            for key,value in self.right_tail_dic.items():
+                mask = X_[key] > value['threshold']
+                if value['method'] == 'log':
+                    X_.loc[mask, key] = np.log(X_.loc[mask, key] + 1e-8)
+                
+                elif value['method'] == 'square_root':
+                    X_.loc[mask, key] = np.sqrt(X_.loc[mask, key])
+
+                elif value['method'] == 'cubic_root':
+                    X_.loc[mask, key] = np.cbrt(X_.loc[mask, key])
+
+        # Apply the left tail transformation
+        if len(self.left_tail_dic) > 0:
+
+            for key,value in self.left_tail_dic.items():
+                mask = X_[key] < value['threshold']
+                if value['method'] == 'log':
+                    X_.loc[mask, key] = np.log(X_.loc[mask, key] + 1e-8)
+                
+                elif value['method'] == 'square_root':
+                    X_.loc[mask, key] = np.sqrt(X_.loc[mask, key])
+
+                elif value['method'] == 'cubic_root':
+                    X_.loc[mask, key] = np.cbrt(X_.loc[mask, key])
+
+        # Apply the Normal Scaler Transformation
+        if len(self.normal_scaler_columns) > 0:
+            X_[self.normal_scaler_columns] = self.normal_scaler.transform(X_[self.normal_scaler_columns])
+            X_[self.normal_scaler_columns] = norm.cdf(X_[self.normal_scaler_columns])
+            for col in self.normal_scaler_columns:
+                X_[col] = 2 * (X_[col] - 0.5)
+
+        # Apply the Power Scaler Transformation
+        if len(self.power_scaler_columns) > 0:
+            X_[self.power_scaler_columns] = self.power_scaler.transform(X_[self.power_scaler_columns])
+
+
+        if len(self.robust_scaler_columns) > 0:
+            X_[self.robust_scaler_columns] = self.robust_scaler.transform(X_[self.robust_scaler_columns])
+
+        # Apply the Normal CDF as a uniform transformation
+        if len(self.normal_cdf_columns) > 0:
+            for col in self.normal_cdf_columns:
+                X_[col] = norm.cdf(X_[col])
+
+        
+        # Apply the tail transformations on the unseen data
+        if len(self.tail_transformation_dic) > 0:
+
+            for key, value in self.tail_transformation_dic.items():
+                if value == 'hyperboloc':
+                    X_[key] = np.tanh(X_[key])
+                if value == 'logistic':
+                    X_[key] = (1 / (1 + np.exp(-X_[col]) ) - 0.5) * 2
+
+        if len(self.min_max_scaler_columns) > 0:
+            X_[self.min_max_scaler_columns] = self.min_max_scaler.transform(X_[self.min_max_scaler_columns])
+
+        return X_
+
+    def transform_to_tensor(self, X, column_list, na_method = 'padding'):
+
+        # You need to add a filter to select only after 2016
+
+        if na_method == 'padding':
+            seq_length = 9
+            pad_value = 2
+
+            X_ = []
+            auxiliary = []
+
+            X[column_list] = X[column_list].fillna(pad_value)
+
+            for ticker, g in X.groupby('Ticker'):
+                g = g.reset_index(drop = True)
+                
+                feature_values = g[column_list].values
+
+                for i in range(len(g)):
+                    sequence = feature_values[max(0, i - seq_length + 1): i + 1]
+
+
+                    if len(sequence) <seq_length:                    
+                        pad = np.full(
+                            (seq_length - len(sequence), sequence.shape[1]),
+                            pad_value)
+                        sequence = np.vstack([pad, sequence])
+                    
+                    X_.append(sequence)
+                    auxiliary.append((ticker, g.loc[i, 'Date']))
+
+
+            X_ = np.stack(X_)
+
+        if na_method == 'missing_column':
+            seq_length = 9
+            pad_value = 2
+
+            X_ = []
+            auxiliary = []
+
+            for ticker, g in X.groupby('Ticker'):
+                print(g)
+                vals = g[column_list].to_numpy(copy = True)
+                mask = (~np.isnan(vals)).astype(np.float32)
+
+                vals = np.nan_to_num(vals, )
+                sys.exit()
+
+        return X_
+    
 ScaleOptionData()
