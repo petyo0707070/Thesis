@@ -70,15 +70,24 @@ class ScaleOptionData():
         self.X_train = self.apply_min_max_scaler(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Call Put Ratio', 'Day Of Week','IV Slope', 'Log Market Cap', 'Call Put Ratio','Vix'])
 
         self.X_validation = self.transform_oos_data(self.X_validation)
+        self.X_test = self.transform_oos_data(self.X_test)
 
-        X_train_tensor = self.transform_to_tensor(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'missing_column')
+
+        df_train_validation = pd.concat([self.X_train, self.X_validation] , axis = 0)
+        df_train_validation_test = pd.concat([df_train_validation, self.X_test], axis = 0)
 
 
-        print(X_train_tensor)
-        print(self.y_train[self.class_column].value_counts(normalize= True))
+        self.X_train_tensor = self.transform_to_tensor(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding')
+        self.X_validation_tensor = self.transform_to_tensor(df_train_validation, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', train_end_date )
+        self.X_test_tensor = self.transform_to_tensor(df_train_validation_test, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', validation_end_date)
+
+
+        print(self.X_train_tensor.shape)
+        print(self.X_validation_tensor.shape)
+        print(self.X_test_tensor.shape)
         
 
-        self.explore_entropy(self.X_train)
+        #self.explore_entropy(self.X_train)
 
     def explore_entropy(self, X):
         for col in X.columns.tolist()[3:]:
@@ -317,36 +326,54 @@ class ScaleOptionData():
 
         return X_
 
-    def transform_to_tensor(self, X, column_list, na_method = 'padding'):
+    def transform_to_tensor(self, X, column_list, na_method = 'padding', cutoff = '2016-01-01'):
 
         # You need to add a filter to select only after 2016
 
         if na_method == 'padding':
             seq_length = 9
             pad_value = 2
+            cutoff = pd.Timestamp(cutoff)
+            q_freq = 'Q-DEC'
 
-            X_ = []
-            auxiliary = []
 
+            X['Date'] = pd.to_datetime(X['Date'])
             X[column_list] = X[column_list].fillna(pad_value)
 
-            for ticker, g in X.groupby('Ticker'):
-                g = g.reset_index(drop = True)
-                
-                feature_values = g[column_list].values
+            X_, auxiliary = [], []
 
-                for i in range(len(g)):
-                    sequence = feature_values[max(0, i - seq_length + 1): i + 1]
+            for ticker, g in X.groupby('Ticker', sort = False):
+
+                g = g.sort_values('Date').reset_index(drop=True)
+                g['Quarter'] = g['Date'].dt.to_period(q_freq)
 
 
-                    if len(sequence) <seq_length:                    
-                        pad = np.full(
-                            (seq_length - len(sequence), sequence.shape[1]),
-                            pad_value)
-                        sequence = np.vstack([pad, sequence])
+                # This might be needed but likely not
+                g = g.drop_duplicates('Quarter', keep = 'last').set_index('Quarter')
+                full_q= pd.period_range(g.index.min(), g.index.max(), freq = q_freq)
+                g = g.reindex(full_q)
+
+                g['Ticker'] = g['Ticker'].ffill()
+                g[column_list] = g[column_list].fillna(pad_value)
+
+                feats = g[column_list].to_numpy()
+                dates = g['Date']
+
+                for i, dt in enumerate(dates):
+                    if pd.isna(dt) or dt < cutoff:
+                        continue
+
+                    start = max(0, i - seq_length + 1)
+                    seq = feats[start:i+1]
+
+                    if seq.shape[0] < seq_length:
+                        pad_rows = seq_length - seq.shape[0]
+                        pad = np.full((pad_rows, seq.shape[1]), pad_value, dtype=feats.dtype)
+                        seq = np.vstack([pad, seq])
+
                     
-                    X_.append(sequence)
-                    auxiliary.append((ticker, g.loc[i, 'Date']))
+                    X_.append(seq)
+                    auxiliary.append((ticker, dt, str(full_q[i])))
 
 
             X_ = np.stack(X_)
@@ -368,4 +395,15 @@ class ScaleOptionData():
 
         return X_
     
-ScaleOptionData()
+    def return_tensors(self):
+        return self.X_train_tensor, self.X_validation_tensor, self.X_test_tensor
+
+
+    def return_X(self):
+        return self.X_train, self.X_validation, self.X_test
+    
+    def return_y(self):
+        return self.y_train, self.y_validation, self.y_test
+
+if __name__ == '__main__':
+    ScaleOptionData()
