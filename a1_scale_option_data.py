@@ -10,7 +10,9 @@ import sys
 
 # This is a Pipeline for Scaling the data and dealing with entropy etc...
 class ScaleOptionData():
-    def __init__(self, train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date = '2024-12-31'):
+    def __init__(self, train_start_date = '2016-01-01', train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date = '2024-12-31'):
+        self.train_start_date = train_start_date
+
         self.X = pd.read_csv(r'D:\Option Data\unscaled_features\X_1.csv') if os.path.exists(r'D:\Option Data\unscaled_features\X_1.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\X_1.csv')
         self.y = pd.read_csv(r'D:\Option Data\unscaled_features\y_1.csv') if os.path.exists(r'D:\Option Data\unscaled_features\y_1.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\y_1.csv')
 
@@ -77,15 +79,10 @@ class ScaleOptionData():
         df_train_validation_test = pd.concat([df_train_validation, self.X_test], axis = 0)
 
 
-        self.X_train_tensor = self.transform_to_tensor(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding')
+        self.X_train_tensor = self.transform_to_tensor(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', train_start_date)
         self.X_validation_tensor = self.transform_to_tensor(df_train_validation, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', train_end_date )
         self.X_test_tensor = self.transform_to_tensor(df_train_validation_test, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', validation_end_date)
 
-
-        print(self.X_train_tensor.shape)
-        print(self.X_validation_tensor.shape)
-        print(self.X_test_tensor.shape)
-        
 
         #self.explore_entropy(self.X_train)
 
@@ -400,10 +397,14 @@ class ScaleOptionData():
 
 
     def return_X(self):
-        return self.X_train, self.X_validation, self.X_test
+        X_train = self.X_train[self.X_train['Date'] >= self.train_start_date]
+
+        return X_train, self.X_validation, self.X_test
     
     def return_y(self):
-        return self.y_train, self.y_validation, self.y_test
+        y_train = self.y_train[self.y_train['Date'] >= self.train_start_date]
+
+        return y_train, self.y_validation, self.y_test
 
 if __name__ == '__main__':
     ScaleOptionData()
