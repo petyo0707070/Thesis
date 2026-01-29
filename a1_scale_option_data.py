@@ -39,12 +39,12 @@ class ScaleOptionData():
         self.X.drop(['Realized Move Pct Abs (1)', 'Realized Move Pct Abs (2)'], axis = 'columns', inplace = True)
 
         self.X_train = self.X[self.X['Date'] <= train_end_date].copy()
-        self.X_validation = self.X[self.X['Date'] <= validation_end_date].copy()
-        self.X_test = self.X[self.X['Date'] <= test_end_date].copy()
+        self.X_validation = self.X[(self.X['Date'] > train_end_date) & (self.X['Date'] <= validation_end_date)].copy()
+        self.X_test = self.X[(self.X['Date'] > validation_end_date) & (self.X['Date'] <= test_end_date)].copy()
 
         self.y_train = self.y[self.y['Date'] <= train_end_date].copy()
-        self.y_validation = self.y[self.y['Date'] <= validation_end_date].copy()
-        self.y_test = self.y[self.y['Date'] <= test_end_date].copy()     
+        self.y_validation = self.y[(self.y['Date'] > train_end_date) & (self.y['Date'] <= validation_end_date)].copy()
+        self.y_test = self.y[(self.y['Date'] > validation_end_date) & (self.y['Date'] <= test_end_date)].copy()     
 
         
         #Here we can invoke all the different transformations :)
@@ -84,13 +84,13 @@ class ScaleOptionData():
         self.X_test_tensor = self.transform_to_tensor(df_train_validation_test, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', validation_end_date)
 
 
-        #self.explore_entropy(self.X_train)
+        #self.explore_entropy(self.X_validation, self.y_validation)
 
-    def explore_entropy(self, X):
+    def explore_entropy(self, X, y):
         for col in X.columns.tolist()[3:]:
 
             entropy = self.shannon_entropy(X[col], 20)
-            mututal_information = self.calculate_mutual_information(X[col], self.y_train['Realized Move Pct'], 20)
+            mututal_information = self.calculate_mutual_information(X[col], y[self.class_column], 20)
             plt.hist(X[col], bins=20, color='skyblue', edgecolor='black', alpha=0.7)
             plt.title(f'{col} Entropy: {round(entropy,3)}, Mutual Informativeness {round(mututal_information, 3)}')
             plt.show()
