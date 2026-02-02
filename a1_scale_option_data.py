@@ -16,6 +16,9 @@ class ScaleOptionData():
         self.X = pd.read_csv(r'D:\Option Data\unscaled_features\X_1.csv') if os.path.exists(r'D:\Option Data\unscaled_features\X_1.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\X_1.csv')
         self.y = pd.read_csv(r'D:\Option Data\unscaled_features\y_1.csv') if os.path.exists(r'D:\Option Data\unscaled_features\y_1.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\y_1.csv')
 
+        if 'Profitable Trade' not in self.y.columns:
+            self.y['Profitable Trade'] = self.y['Bid Ask PNL'] >= 0.05
+
         # Sort By ticker than date
         self.X = self.X.sort_values(['Ticker', 'Date'])
         self.y = self.y.loc[self.X.index]
