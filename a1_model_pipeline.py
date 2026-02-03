@@ -17,11 +17,15 @@ from itertools import combinations_with_replacement
 
 
 class ModelPipeline():
-    def __init__(self, class_column='Profitable Trade', polynomial_expansion_degree = 1):
+    def __init__(self, class_column='Profitable Trade', polynomial_expansion_degree = 1, fit_xgboost = False, fit_hybrid = False, fit_nn = False):
         option_scaler = ScaleOptionData(train_start_date='2016-01-01', train_end_date='2020-12-31',
                                         validation_end_date='2022-12-31', test_end_date='2024-12-31')
 
         self.polynomial_expansion_degree = polynomial_expansion_degree
+        self.fit_xgboost = fit_xgboost
+        self.fit_hybrid = fit_hybrid
+        self.fit_nn = fit_nn
+
 
         if polynomial_expansion_degree > 1:
             self.use_polynomial_expansion = True
@@ -59,13 +63,11 @@ class ModelPipeline():
             self.X_train_train_tensor = self.get_polynomial_expanded_tensor(self.X_train_train_tensor, self.polynomial_expansion_degree)
             self.X_train_validation_tensor = self.get_polynomial_expanded_tensor(self.X_train_validation_tensor, self.polynomial_expansion_degree)
 
-            #self.X_train = self.get_polynomial_expanded_features(self.X_train, self.polynomial_expansion_degree)
-            #self.X_validation = self.get_polynomial_expanded_features(self.X_validation, self.polynomial_expansion_degree)
-            #self.X_test = self.get_polynomial_expanded_features(self.X_test, self.polynomial_expansion_degree)
+            self.X_train = self.get_polynomial_expanded_features(self.X_train, self.polynomial_expansion_degree)
+            self.X_validation = self.get_polynomial_expanded_features(self.X_validation, self.polynomial_expansion_degree)
+            self.X_test = self.get_polynomial_expanded_features(self.X_test, self.polynomial_expansion_degree)
 
-
-
-
+        self.fit_xgboost_model()
         self.fit_hybrid_model()
 
     def fit_hybrid_model(self):
@@ -150,62 +152,77 @@ class ModelPipeline():
         plt.title(f'Confusion Matrix: XGBoost with Embeddings')
         plt.show()
 
-        print(self.training_embeddings)
-        print(self.training_embeddings.shape)
-
         self.plot_performance_over_epochs()
 
 
-    def get_polynomial_expanded_features(self, X, degree_ = 3):
-        poly = PolynomialFeatures(degree = degree_, include_bias= False)
-        na_rows = X[X.isna().any(axis=1)]
-        poly_features = poly.fit_transform(X)
-        feature_names = poly.get_feature_names_out(X.columns)
+    def fit_xgboost_model(self):
 
-        X_polynomially_expanded = pd.DataFrame(poly_features, columns = feature_names)
-        return X_polynomially_expanded
+        self.xgboost_model = XGBClassifier(eta=0.01, n_estimators=300, max_depth=12, objective='binary:logistic', tree_method='hist', eval_metric='aucpr')
+        self.xgboost_model.fit(self.X_train, self.y_train[self.class_column])
+        y_val_pred_xgboost = self.xgboost_model.predict(self.X_validation)
+        cm = confusion_matrix(self.y_validation[self.class_column], y_val_pred_xgboost)
+
+        disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
+        disp.plot(cmap='Blues')
+
+        if self.use_polynomial_expansion:
+            plt.title(f'Confusion Matrix: XGBoost Polynomial Expanded {self.polynomial_expansion_degree}')
+        else:
+            plt.title(f'Confusion Matrix: Xgboost')
+
+        plt.show()
+
+
+
+    def get_polynomial_expanded_features(self, X, degree_ = 3):
+        X = X.fillna(1e-8)
+
+        poly = PolynomialFeatures(degree=degree_, include_bias=False)
+        poly_features = poly.fit_transform(X)
+
+        return pd.DataFrame(poly_features, index=X.index,columns=poly.get_feature_names_out(X.columns))
 
     def get_polynomial_expanded_tensor(self, X_tensor, degree_ = 3):
 
-        T, N, F = X_tensor.shape
-        feature_names = [f"x{j}" for j in range(F)]
+            T, N, F = X_tensor.shape
+            feature_names = [f"x{j}" for j in range(F)]
 
-        exps_list = []
-        names = []
-        for d in range(1, degree_ + 1):
-            for combo in combinations_with_replacement(range(F), d):
-                e = np.zeros(F, dtype=int)
-                for idx in combo:
-                    e[idx] += 1
-                exps_list.append(e)
+            exps_list = []
+            names = []
+            for d in range(1, degree_ + 1):
+                for combo in combinations_with_replacement(range(F), d):
+                    e = np.zeros(F, dtype=int)
+                    for idx in combo:
+                        e[idx] += 1
+                    exps_list.append(e)
 
-                # Build a readable name: e.g., X^2 Y
-                parts = []
-                for j, p in enumerate(e):
-                    if p == 1:
-                        parts.append(f"{feature_names[j]}")
-                    elif p > 1:
-                        parts.append(f"{feature_names[j]}^{p}")
-                names.append(" ".join(parts))
+                    # Build a readable name: e.g., X^2 Y
+                    parts = []
+                    for j, p in enumerate(e):
+                        if p == 1:
+                            parts.append(f"{feature_names[j]}")
+                        elif p > 1:
+                            parts.append(f"{feature_names[j]}^{p}")
+                    names.append(" ".join(parts))
 
-        E = np.vstack(exps_list)  # (M, F)
-        M = E.shape[0]
+            E = np.vstack(exps_list)  # (M, F)
+            M = E.shape[0]
 
-        X2 = X_tensor.reshape(-1, F)  # (TN, F)
-        TN = X2.shape[0]
+            X2 = X_tensor.reshape(-1, F)  # (TN, F)
+            TN = X2.shape[0]
 
-        out = np.ones((TN, M), dtype=X_tensor.dtype)
+            out = np.ones((TN, M), dtype=X_tensor.dtype)
 
-        for j in range(F):
-            exp_j = E[:, j]  # (M,)
-            if np.any(exp_j):  # skip if all zeros for performance
-                out *= np.power(X2[:, j][:, None], exp_j[None, :])
+            for j in range(F):
+                exp_j = E[:, j]  # (M,)
+                if np.any(exp_j):  # skip if all zeros for performance
+                    out *= np.power(X2[:, j][:, None], exp_j[None, :])
 
-            # Reshape back to (T, N, M)
+                # Reshape back to (T, N, M)
 
-        X_expanded = out.reshape(T, N, M)
+            X_expanded = out.reshape(T, N, M)
 
-        return X_expanded
+            return X_expanded
 
     def split_train_tensor(self, split_ratio=0.8):
         split_idx = int(0.8 * self.X_train_tensor.shape[0])
@@ -246,4 +263,4 @@ class ModelPipeline():
 
 
 if __name__ == '__main__':
-    ModelPipeline(polynomial_expansion_degree= 3)
+    ModelPipeline(polynomial_expansion_degree= 2)
