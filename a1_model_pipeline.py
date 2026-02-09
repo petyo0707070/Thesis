@@ -10,51 +10,111 @@ from xgboost import XGBClassifier
 from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
-
+from itertools import combinations_with_replacement
+from sklearn.preprocessing import PolynomialFeatures
 
 import datetime as dt
 import os
 
 
 class ModelPipeline():
-    def __init__(self, class_column = 'Profitable Trade', plot_performance = True, classification_threshold = 0.5):
+    def __init__(self, class_column = 'Profitable Trade', plot_performance = True, classification_threshold = 0.5, polynomial_expansion_degree = 1, permutation_test = False, 
+                 run_logistic = True, run_xgboost = True, run_hybrid = True, run_ada = True, synthetic_data_multiplyer = 0):
 
-        self.plot_performance = plot_performance
-        self.classification_threshold = classification_threshold
+        # This will take care of creating synthetic data
+        if synthetic_data_multiplyer > 0:
+            self.synthetic_data_multiplyer = synthetic_data_multiplyer
+            self.use_synthetic_data = True
+        else:
+            self.use_synthetic_data = False
+
+
+        # Housekeeping to determine whether polynomial expansion will be used
+        if polynomial_expansion_degree > 1:
+            self.polynomial_expansion_degree = polynomial_expansion_degree
+            self.use_poly_expansion = True
+        else:
+            self.use_poly_expansion = False
+
+        self.run_logistic = run_logistic # Whether to fit a Logistic Regression model
+        self.run_xgboost = run_xgboost #Whether to fit an XGBoost model
+        self.run_hybrid = run_hybrid # Whether to fit the Hybrid Model -> Get a seq_nn and  XGBoost with embeddings
+        self.run_ada = run_ada # Whether to fit an ADA Boosted Decision Tree Model
+        self.class_column = class_column # Define the class we want to classify
+
+        self.permutation_test = permutation_test # Decide whether to run a permutation test
+        self.plot_performance = plot_performance # Whether we will plot Confusion matrixes per model , NN performance over epochs etc...
+        self.classification_threshold = classification_threshold # What % do we need to classify as a 1
         self.val_pred_probs = []
+        self.test_pred_probs = []
 
-        option_scaler = ScaleOptionData(train_start_date = '2016-01-01', train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date='2024-12-31')
-        self.X_train, self.X_validation, self.X_test = option_scaler.return_X()
+        option_scaler = ScaleOptionData(train_start_date = '2016-01-01', train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date='2024-12-31') # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
+        self.X_train, self.X_validation, self.X_test = option_scaler.return_X() # Get the X feature matrix for the train, validation and test
 
+        # Drop columns which we will not use for fitting the model
         self.X_train = self.X_train[[col for col in self.X_train.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]
         self.X_validation = self.X_validation[[col for col in self.X_validation.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]   
         self.X_test = self.X_test[[col for col in self.X_test.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]   
    
-
+        # For some reason I had to reset the index
         self.X_train.reset_index(inplace= True, drop = True)
         self.X_validation.reset_index(inplace= True, drop = True)
         self.X_test.reset_index(inplace= True, drop = True)
 
+        # Fill NA with 2 i.e. some sort of masking if I am working with a model that can't natively handle NA such as ADA Boosted Decision Trees or a Logistic regression
         self.X_train_masked = self.X_train.fillna(2)
         self.X_validation_masked = self.X_validation.fillna(2)
         self.X_test_masked = self.X_test.fillna(2)
+        self.y_train, self.y_validation, self.y_test = option_scaler.return_y() # Get the y for training, validation and test
 
 
-        self.X_train_tensor, self.X_validation_tensor, self.X_test_tensor = option_scaler.return_tensors()
-        self.y_train, self.y_validation, self.y_test = option_scaler.return_y()
-        self.class_column = class_column
+        # Implements the generation of synthetic data that would perhaps be useful to train better generalizable models
+        if self.use_synthetic_data:
+            self.Xy_train = self.X_train.copy()
+            self.Xy_train[self.class_column] = self.y_train[self.class_column].values
 
-        self.X_train.to_csv(r'D:\Option Data\scaled_features\X_train_1.csv', index = False)
-        self.y_train.to_csv(r'D:\Option Data\scaled_features\y_train_1.csv', index = False)
+            self.X_train, self.y_train = self.generate_synthetic_data(self.Xy_train)
+            print(self.X_train)
+            print(self.y_train)
+
+            sys.exit()
+        
+        self.X_train_tensor, self.X_validation_tensor, self.X_test_tensor = option_scaler.return_tensors() # Get tensors of  the training, validation and test data
+        self.split_train_tensor() # Create a X_train_train and X_train_validation tensor
 
 
         print(f'y_train: {self.y_train.shape}, X_train: {self.X_train.shape}, X_train_tensor: {self.X_train_tensor.shape}')
         print(f'y_validation: {self.y_validation.shape}, X_train: {self.X_validation.shape}, X_validation_tensor: {self.X_validation_tensor.shape}')
 
-        self.fit_logistic_regression()
-        self.fit_xgboost()
-        self.run_permutation_test(model = self.model_xgboost, X = self.X_train_masked, y = self.y_train)
-        self.fit_hybrid_model()
+
+        # Implement a polynomial expansion if I decide to
+        if self.use_poly_expansion:
+            self.X_train_tensor = self.get_polynomial_expanded_tensor(self.X_train_tensor, self.polynomial_expansion_degree)
+            self.X_validation_tensor = self.get_polynomial_expanded_tensor(self.X_validation_tensor, self.polynomial_expansion_degree)
+            self.X_test_tensor = self.get_polynomial_expanded_tensor(self.X_test_tensor, self.polynomial_expansion_degree)
+            self.X_train_train_tensor = self.get_polynomial_expanded_tensor(self.X_train_train_tensor, self.polynomial_expansion_degree)
+            self.X_train_validation_tensor = self.get_polynomial_expanded_tensor(self.X_train_validation_tensor, self.polynomial_expansion_degree)
+
+            self.X_train = self.get_polynomial_expanded_features(self.X_train, self.polynomial_expansion_degree)
+            self.X_validation = self.get_polynomial_expanded_features(self.X_validation, self.polynomial_expansion_degree)
+            self.X_test = self.get_polynomial_expanded_features(self.X_test, self.polynomial_expansion_degree)
+
+            self.X_train_masked = self.get_polynomial_expanded_features(self.X_train_masked, self.polynomial_expansion_degree)
+            self.X_validation_masked = self.get_polynomial_expanded_features(self.X_validation_masked, self.polynomial_expansion_degree)
+            self.X_test_masked = self.get_polynomial_expanded_features(self.X_test_masked, self.polynomial_expansion_degree)
+
+        if self.run_logistic:
+            self.fit_logistic_regression()
+
+        if self.run_xgboost:
+            self.fit_xgboost()
+
+        if self.permutation_test:
+            self.run_permutation_test(model = self.model_xgboost, X = self.X_train, y = self.y_train)
+        
+        if self.run_hybrid:
+            self.fit_hybrid_model()
+
         self.fit_ensemble(ensemble_type = 'soft_voting')
 
     def fit_hybrid_model(self):
@@ -62,7 +122,6 @@ class ModelPipeline():
         timesteps = self.X_train_tensor.shape[1]
         n_features = self.X_train_tensor.shape[2]
 
-        self.split_train_tensor()
 
         pr_auc = tf.keras.metrics.AUC(curve = 'PR', name = 'pr_auc')
 
@@ -113,7 +172,7 @@ class ModelPipeline():
 
         self.history = model.fit(self.X_train_train_tensor, self.y_train_train[self.class_column],
                             validation_data = (self.X_train_validation_tensor, self.y_train_validation[self.class_column]),
-                            epochs = 100, 
+                            epochs = 10, 
                             batch_size = 32,
                             callbacks = [es, ckpt, rlrop, tb_callback],
                             verbose = 1)
@@ -128,6 +187,8 @@ class ModelPipeline():
 
         self.y_test_pred_nn_seq_proba = self.model_seq.predict(self.X_test_tensor)
         self.y_test_pred_nn_seq = (self.y_test_pred_nn_seq_proba >= self.classification_threshold).astype(int).flatten()
+
+        self.test_pred_probs.append(self.y_test_pred_nn_seq_proba.flatten())
 
         # Extract the embeddings from the Train, Validation and Test tensors
         self.training_embeddings = self.extract_embeddings(self.X_train_tensor)
@@ -149,6 +210,7 @@ class ModelPipeline():
 
 
         self.val_pred_probs.append(self.y_val_pred_model_embeddings_proba)
+        self.test_pred_probs.append(self.y_test_pred_model_embeddings_proba)
 
         cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_model_embeddings)
 
@@ -178,6 +240,7 @@ class ModelPipeline():
         cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_xgboost)
 
         self.val_pred_probs.append(self.y_val_pred_xgboost_proba)
+        self.test_pred_probs.append(self.y_test_pred_xgboost_proba)
 
         if self.plot_performance:
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
@@ -233,7 +296,12 @@ class ModelPipeline():
         self.y_val_pred_ada = self.model_ada_boost.predict(self.X_validation_masked)
         self.y_val_pred_ada_proba = self.model_ada_boost.predict_proba(self.X_validation_masked)[:, 1]
 
+        self.y_test_pred_ada = self.model_ada_boost.predict(self.X_test_masked)
+        self.y_test_pred_ada_proba = self.model_ada_boost.predict_proba(self.X_test_masked)
+
+
         self.val_pred_probs.append(self.y_val_pred_ada_proba)
+        self.test_pred_probs.append(self.y_test_pred_ada_proba)
 
         cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_ada)
         if self.plot_performance:
@@ -250,9 +318,13 @@ class ModelPipeline():
         self.y_val_pred_logistic = self.model_logistic_regression.predict(self.X_validation_masked)
         self.y_val_pred_logistic_proba = self.model_logistic_regression.predict_proba(self.X_validation_masked)[:, 1]
 
+        self.y_test_pred_logistic = self.model_logistic_regression.predict(self.X_test_masked)
+        self.y_test_pred_logistic_proba = self.model_logistic_regression.predict_proba(self.X_test_masked)[:, 1]
+
         cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_logistic)
 
         self.val_pred_probs.append(self.y_val_pred_logistic_proba)
+        self.test_pred_probs.append(self.y_test_pred_logistic_proba)
 
         if self.plot_performance:
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
@@ -295,6 +367,23 @@ class ModelPipeline():
             plt.title(f'Confusion Matrix: Voting (Baseline: 41%)')
             plt.show() 
 
+        if ensemble_type == 'grnn':
+            from a1_grnn import GRNN
+            
+            matrix_val_probs = np.array(self.val_pred_probs).T
+            matrix_test_probs = np.array(self.test_pred_probs).T
+
+
+            self.grnn = GRNN(sigma = 0.1)
+            self.grnn.fit(matrix_val_probs, self.y_validation[self.class_column])
+            y_test_pred = self.grnn.predict(matrix_test_probs).astype(int)
+
+            cm = confusion_matrix(self.y_test[self.class_column], y_test_pred)
+            
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
+            disp.plot(cmap='Blues')
+            plt.title(f'Confusion Matrix: Voting (Baseline: 41%)')
+            plt.show() 
 
     def run_permutation_test(self, model, X, y, n_iterations = 200):
         from sklearn.base import clone
@@ -352,5 +441,79 @@ class ModelPipeline():
         plt.tight_layout()
         plt.show()
 
+
+    def get_polynomial_expanded_features(self, X, degree_ = 3):
+        X = X.fillna(1e-8)
+
+        poly = PolynomialFeatures(degree=degree_, include_bias=False)
+        poly_features = poly.fit_transform(X)
+
+        return pd.DataFrame(poly_features, index=X.index,columns=poly.get_feature_names_out(X.columns))
+
+    def get_polynomial_expanded_tensor(self, X_tensor, degree_ = 3):
+
+            T, N, F = X_tensor.shape
+            feature_names = [f"x{j}" for j in range(F)]
+
+            exps_list = []
+            names = []
+            for d in range(1, degree_ + 1):
+                for combo in combinations_with_replacement(range(F), d):
+                    e = np.zeros(F, dtype=int)
+                    for idx in combo:
+                        e[idx] += 1
+                    exps_list.append(e)
+
+                    # Build a readable name: e.g., X^2 Y
+                    parts = []
+                    for j, p in enumerate(e):
+                        if p == 1:
+                            parts.append(f"{feature_names[j]}")
+                        elif p > 1:
+                            parts.append(f"{feature_names[j]}^{p}")
+                    names.append(" ".join(parts))
+
+            E = np.vstack(exps_list)  # (M, F)
+            M = E.shape[0]
+
+            X2 = X_tensor.reshape(-1, F)  # (TN, F)
+            TN = X2.shape[0]
+
+            out = np.ones((TN, M), dtype=X_tensor.dtype)
+
+            for j in range(F):
+                exp_j = E[:, j]  # (M,)
+                if np.any(exp_j):  # skip if all zeros for performance
+                    out *= np.power(X2[:, j][:, None], exp_j[None, :])
+
+                # Reshape back to (T, N, M)
+
+            X_expanded = out.reshape(T, N, M)
+
+            return X_expanded
+
+    def generate_synthetic_data(self, Xy):
+        from sdv.single_table  import CTGAN
+
+
+        if len(Xy) < 1000:
+            gen_dim = (128, 128)
+            discr_dim = (128, 128)
+
+        else:
+            gen_dim = (256, 256)
+            discr_dim = (256, 256)
+
+        self.GAN = CTGAN(epochs = 300, batch_size = 64, generator_dim = gen_dim, discriminator_dim = discr_dim, verbose = True)
+        self.GAN.fit(Xy, discrete_columns = self.class_column)
+
+        synthetic_df = self.GAN.sample(int(self.synthetic_data_multiplyer * len(Xy)))
+
+        Xy = pd.concat([Xy, synthetic_df], axis = 0)
+
+
+        return Xy[[col for col in Xy.columns if col != self.class_column]], Xy[self.class_column]
+
+
 if __name__ == '__main__':
-    ModelPipeline(plot_performance= False, classification_threshold= 0.5)
+    ModelPipeline(plot_performance= False, classification_threshold= 0.5, polynomial_expansion_degree= 1, synthetic_data_multiplyer= 9)
