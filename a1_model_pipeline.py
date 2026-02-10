@@ -19,12 +19,14 @@ import os
 
 class ModelPipeline():
     def __init__(self, class_column = 'Profitable Trade', plot_performance = True, classification_threshold = 0.5, polynomial_expansion_degree = 1, permutation_test = False, 
-                 run_logistic = True, run_xgboost = True, run_hybrid = True, run_ada = True, synthetic_data_multiplyer = 0):
+                 run_logistic = True, run_xgboost = True, run_hybrid = True, run_ada = True, synthetic_data_multiplyer = 0, visualize_synthetic_data = False, synthetic_generator = 'GAN'):
 
         # This will take care of creating synthetic data
         if synthetic_data_multiplyer > 0:
             self.synthetic_data_multiplyer = synthetic_data_multiplyer
             self.use_synthetic_data = True
+            self.visualize_synthetic_data = visualize_synthetic_data
+            self.synthetic_generator = synthetic_generator
         else:
             self.use_synthetic_data = False
 
@@ -49,36 +51,41 @@ class ModelPipeline():
         self.test_pred_probs = []
 
         option_scaler = ScaleOptionData(train_start_date = '2016-01-01', train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date='2024-12-31') # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
-        self.X_train, self.X_validation, self.X_test = option_scaler.return_X() # Get the X feature matrix for the train, validation and test
+        self.X_train_, self.X_validation_, self.X_test_ = option_scaler.return_X() # Get the X feature matrix for the train, validation and test
+
+        # For some reason I had to reset the index
+        self.X_train_.reset_index(inplace= True, drop = True)
+        self.X_validation_.reset_index(inplace= True, drop = True)
+        self.X_test_.reset_index(inplace= True, drop = True)
+        self.y_train, self.y_validation, self.y_test = option_scaler.return_y() # Get the y for training, validation and test
+
 
         # Drop columns which we will not use for fitting the model
-        self.X_train = self.X_train[[col for col in self.X_train.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]
-        self.X_validation = self.X_validation[[col for col in self.X_validation.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]   
-        self.X_test = self.X_test[[col for col in self.X_test.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]   
+        self.X_train = self.X_train_[[col for col in self.X_train_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]
+        self.X_validation = self.X_validation_[[col for col in self.X_validation_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]   
+        self.X_test = self.X_test_[[col for col in self.X_test_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]   
    
-        # For some reason I had to reset the index
-        self.X_train.reset_index(inplace= True, drop = True)
-        self.X_validation.reset_index(inplace= True, drop = True)
-        self.X_test.reset_index(inplace= True, drop = True)
+
+        # Implements the generation of synthetic data that would perhaps be useful to train better generalizable models
+        if self.use_synthetic_data:
+            self.Xy_train = self.X_train.copy()
+
+            if self.synthetic_generator == 'Sequential':
+                self.Xy_train['Ticker'] = self.X_train_['Ticker'].values
+                self.Xy_train['Seq Count'] = self.X_train_.groupby('Ticker').cumcount()# + 1
+
+            self.Xy_train[self.class_column] = self.y_train[self.class_column].values
+
+            self.X_train, self.y_train = self.generate_synthetic_data(self.Xy_train, generator = self.synthetic_generator)
+            print(self.X_train)
+            print(self.y_train)
 
         # Fill NA with 2 i.e. some sort of masking if I am working with a model that can't natively handle NA such as ADA Boosted Decision Trees or a Logistic regression
         self.X_train_masked = self.X_train.fillna(2)
         self.X_validation_masked = self.X_validation.fillna(2)
         self.X_test_masked = self.X_test.fillna(2)
-        self.y_train, self.y_validation, self.y_test = option_scaler.return_y() # Get the y for training, validation and test
 
 
-        # Implements the generation of synthetic data that would perhaps be useful to train better generalizable models
-        if self.use_synthetic_data:
-            self.Xy_train = self.X_train.copy()
-            self.Xy_train[self.class_column] = self.y_train[self.class_column].values
-
-            self.X_train, self.y_train = self.generate_synthetic_data(self.Xy_train)
-            print(self.X_train)
-            print(self.y_train)
-
-            sys.exit()
-        
         self.X_train_tensor, self.X_validation_tensor, self.X_test_tensor = option_scaler.return_tensors() # Get tensors of  the training, validation and test data
         self.split_train_tensor() # Create a X_train_train and X_train_validation tensor
 
@@ -492,28 +499,55 @@ class ModelPipeline():
 
             return X_expanded
 
-    def generate_synthetic_data(self, Xy):
-        from sdv.single_table  import CTGAN
+    def generate_synthetic_data(self, Xy, generator = 'GAN'):
+        from sdv.metadata import Metadata
+
+        if generator == 'GAN':
+            from sdv.single_table import CTGANSynthesizer
+        
+            # First get the info about the columns such as names, dtypes, rounding etc...
+            Xy_metadata = Metadata.detect_from_dataframe(data = self.Xy_train, table_name = 'Xy_train')
+
+            # Define the GAN Synthesizer
+            self.synthesizer = CTGANSynthesizer(metadata = Xy_metadata, epochs = 300, batch_size = 100, verbose = True) # Keep in mind default batch size is 500 accordingg to the documentation
+            self.synthesizer.fit(Xy) # Fit the GAN to the actual data 
+
+            synthetic_df = self.synthesizer.sample(num_rows = int(self.synthetic_data_multiplyer * len(Xy))) # Get the synthetic data
+
+            # Those here are some diagnostic checks to insure that everything is working as expected with the GAN
+            if self.visualize_synthetic_data:
+                from sdv.evaluation.single_table import run_diagnostic, evaluate_quality, get_column_plot
+
+                diagnostic_report = run_diagnostic(real_data=Xy, synthetic_data=synthetic_df, metadata = Xy_metadata) # This checks that the columns are generated according to the correct datatype etc... should be 100%
+                quality_report = evaluate_quality(real_data=Xy, synthetic_data=synthetic_df, metadata = Xy_metadata) # This checks how well the synthetic data resembles the real data on a similarity score between 0% and 100%, here the check is for patterns etc... 80% is good enough
+
+                for col in self.Xy_train.columns.tolist():
+                    fig = get_column_plot(real_data=Xy, synthetic_data=synthetic_df, metadata = Xy_metadata, column_name=col)
+                    fig.show()
+
+            Xy = pd.concat([Xy, synthetic_df], axis = 0)
 
 
-        if len(Xy) < 1000:
-            gen_dim = (128, 128)
-            discr_dim = (128, 128)
-
-        else:
-            gen_dim = (256, 256)
-            discr_dim = (256, 256)
-
-        self.GAN = CTGAN(epochs = 300, batch_size = 64, generator_dim = gen_dim, discriminator_dim = discr_dim, verbose = True)
-        self.GAN.fit(Xy, discrete_columns = self.class_column)
-
-        synthetic_df = self.GAN.sample(int(self.synthetic_data_multiplyer * len(Xy)))
-
-        Xy = pd.concat([Xy, synthetic_df], axis = 0)
+            return Xy[[col for col in self.X_train.columns]], Xy[[self.class_column]]
 
 
-        return Xy[[col for col in Xy.columns if col != self.class_column]], Xy[self.class_column]
+        if generator == 'Sequential':
+            from sdv.sequential import PARSynthesizer
+            # First get the info about the columns such as names, dtypes, rounding etc...
+            Xy_metadata = Metadata.detect_from_dataframe(data = self.Xy_train, table_name = 'Xy_train')            
+            Xy_metadata.update_column(column_name='Ticker', sdtype='id')
+            Xy_metadata.set_sequence_key('Ticker') # Set the Sequence key i.e. which company it is
+            Xy_metadata.set_sequence_index('Seq Count') # Set the sequence index i.e. which earnings is it in sequence
+
+            self.synthesizer = PARSynthesizer(metadata = Xy_metadata, epochs = 128, enforce_min_max_values = True, enforce_rounding = True, verbose = True) # This is the sequential model synthesizer PARSynthesizer
+            self.synthesizer.fit(Xy)
+
+            synthetic_df = self.synthesizer.sample(num_sequences = int(self.synthetic_data_multiplyer * self.X_train_['Ticker'].nunique()) )
+
+            Xy = pd.concat([Xy, synthetic_df], axis = 0)
+
+            return Xy[[col for col in self.X_train.columns]], Xy[[self.class_column]]            
 
 
 if __name__ == '__main__':
-    ModelPipeline(plot_performance= False, classification_threshold= 0.5, polynomial_expansion_degree= 1, synthetic_data_multiplyer= 9)
+    ModelPipeline(plot_performance= True, classification_threshold= 0.5, polynomial_expansion_degree= 1, synthetic_data_multiplyer= 9, visualize_synthetic_data= False, run_hybrid= False, synthetic_generator= 'Sequential')
