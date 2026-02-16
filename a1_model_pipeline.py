@@ -19,7 +19,17 @@ import os
 
 class ModelPipeline():
     def __init__(self, class_column = 'Profitable Trade', plot_performance = True, classification_threshold = 0.5, polynomial_expansion_degree = 1, permutation_test = False, 
-                 run_logistic = True, run_xgboost = True, run_hybrid = True, run_ada = True, synthetic_data_multiplyer = 0, visualize_synthetic_data = False, synthetic_generator = 'GAN'):
+                 run_logistic = True, run_xgboost = True, run_hybrid = True, run_ada = True, synthetic_data_multiplyer = 0, visualize_synthetic_data = False, synthetic_generator = 'GAN',
+                 plot_correlation_matrix = False, train_start_date = '2016-01-01', train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date = '2024-12-31'):
+
+        # Foundational parameters for the Option scaler
+        self.train_start_date = train_start_date
+        self.train_end_date = train_end_date
+        self.validation_end_date = validation_end_date
+        self.test_end_date = test_end_date
+
+        # Whether to plot the correlation mattrix of the training features
+        self.plot_correlation_matrix = plot_correlation_matrix
 
         # This will take care of creating synthetic data
         if synthetic_data_multiplyer > 0:
@@ -38,6 +48,7 @@ class ModelPipeline():
         else:
             self.use_poly_expansion = False
 
+
         self.run_logistic = run_logistic # Whether to fit a Logistic Regression model
         self.run_xgboost = run_xgboost #Whether to fit an XGBoost model
         self.run_hybrid = run_hybrid # Whether to fit the Hybrid Model -> Get a seq_nn and  XGBoost with embeddings
@@ -50,7 +61,7 @@ class ModelPipeline():
         self.val_pred_probs = []
         self.test_pred_probs = []
 
-        option_scaler = ScaleOptionData(train_start_date = '2016-01-01', train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date='2024-12-31') # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
+        option_scaler = ScaleOptionData(train_start_date = self.train_start_date, train_end_date = self.train_end_date, validation_end_date = self.validation_end_date, test_end_date=self.test_end_date) # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
         self.X_train_, self.X_validation_, self.X_test_ = option_scaler.return_X() # Get the X feature matrix for the train, validation and test
 
         # For some reason I had to reset the index
@@ -61,10 +72,21 @@ class ModelPipeline():
 
 
         # Drop columns which we will not use for fitting the model
-        self.X_train = self.X_train_[[col for col in self.X_train_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]
-        self.X_validation = self.X_validation_[[col for col in self.X_validation_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]   
-        self.X_test = self.X_test_[[col for col in self.X_test_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date']]   
+        self.X_train = self.X_train_[[col for col in self.X_train_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
+        self.X_validation = self.X_validation_[[col for col in self.X_validation_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]   
+        self.X_test = self.X_test_[[col for col in self.X_test_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]   
    
+
+#-----------------------------------THIS OVERWRITES THE CLASS TO USE REALISTIC PNL TO SEE HOW THE MODEL IMPROVES------------------------------------------------------------------------------------
+        self.y_train[self.class_column] = self.y_train['Realistic PNL'] >= 0.25
+        self.y_validation[self.class_column] = self.y_validation['Realistic PNL'] >= 0.25
+        self.y_test[self.class_column] = self.y_test['Realistic PNL'] >= 0.25
+
+
+
+#-----------------------------------------------------------------------------------------------------------------------
+
+
 
         # Implements the generation of synthetic data that would perhaps be useful to train better generalizable models
         if self.use_synthetic_data:
@@ -89,9 +111,12 @@ class ModelPipeline():
         self.X_train_tensor, self.X_validation_tensor, self.X_test_tensor = option_scaler.return_tensors() # Get tensors of  the training, validation and test data
         self.split_train_tensor() # Create a X_train_train and X_train_validation tensor
 
+        if self.plot_correlation_matrix:
+            self.run_correlation_matrix(self.X_train)
 
         print(f'y_train: {self.y_train.shape}, X_train: {self.X_train.shape}, X_train_tensor: {self.X_train_tensor.shape}')
         print(f'y_validation: {self.y_validation.shape}, X_train: {self.X_validation.shape}, X_validation_tensor: {self.X_validation_tensor.shape}')
+
 
 
         # Implement a polynomial expansion if I decide to
@@ -179,7 +204,7 @@ class ModelPipeline():
 
         self.history = model.fit(self.X_train_train_tensor, self.y_train_train[self.class_column],
                             validation_data = (self.X_train_validation_tensor, self.y_train_validation[self.class_column]),
-                            epochs = 10, 
+                            epochs = 100, 
                             batch_size = 32,
                             callbacks = [es, ckpt, rlrop, tb_callback],
                             verbose = 1)
@@ -227,12 +252,21 @@ class ModelPipeline():
             plt.title(f'Confusion Matrix: XGBoost with Embeddings (Baseline: 41%)')
             plt.show() 
 
+            y_validation_ = self.y_validation.copy()
+            y_validation_['Prediction'] = self.y_val_pred_model_embeddings
+            y_validation_['Prediction Probability'] = self.y_val_pred_model_embeddings_proba
+            y_validation_['Residual'] = y_validation_[self.class_column] - y_validation_['Prediction Probability']
+            serial_correlation_dist = y_validation_.groupby('Ticker')['Residual'].apply(self.get_acf)
+            prop_ones = y_validation_.groupby('Ticker')['Prediction'].mean()
+            plot_data = pd.DataFrame({'ACF': serial_correlation_dist, 'Prop_1': prop_ones}).dropna()
+            weights_red = plot_data['Prop_1']
+            weights_blue = 1 - plot_data['Prop_1']
 
-        if self.plot_performance:
-            self.plot_performance_over_epochs()
-            plt.scatter(self.y_val_pred_nn_seq, self.y_validation[self.class_column])
-            plt.title('Predicted Probabilities (NN) vs Validation Class')
+            plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'], alpha=0.8)
+            plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker) il Modello con Embeddings', fontsize=14)
             plt.show()
+
+            self.plot_performance_over_epochs()
 
     def fit_xgboost(self):
         self.model_xgboost = XGBClassifier(eta = 0.01, n_estimators = 300, max_depth = 12, objective = 'binary:logistic', tree_method = 'hist', eval_metric = 'aucpr')
@@ -254,6 +288,20 @@ class ModelPipeline():
             disp.plot(cmap='Blues')
             plt.title(f'Confusion Matrix: XGBoost(Baseline: 41%)')
             plt.show() 
+
+            y_validation_ = self.y_validation.copy()
+            y_validation_['Prediction'] = self.y_val_pred_xgboost
+            y_validation_['Prediction Probability'] = self.y_val_pred_xgboost_proba
+            y_validation_['Residual'] = y_validation_[self.class_column] - y_validation_['Prediction Probability']
+            serial_correlation_dist = y_validation_.groupby('Ticker')['Residual'].apply(self.get_acf)
+            prop_ones = y_validation_.groupby('Ticker')['Prediction'].mean()
+            plot_data = pd.DataFrame({'ACF': serial_correlation_dist, 'Prop_1': prop_ones}).dropna()
+            weights_red = plot_data['Prop_1']
+            weights_blue = 1 - plot_data['Prop_1']
+
+            plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'], alpha=0.8)
+            plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker) il XGBoost', fontsize=14)
+            plt.show()
 
     def split_train_tensor(self, split_ratio = 0.8):
         split_idx = int(0.8 * self.X_train_tensor.shape[0])
@@ -336,8 +384,24 @@ class ModelPipeline():
         if self.plot_performance:
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
-            plt.title(f'Confusion Matrix: Logistic Regression (Baseline: 41%)')
+            plt.title(f'Confusion Matrix: Logistic Regression (Baseline: {self.y_validation[self.class_column].mean()*100:.2f}%)')
             plt.show()
+
+#------------------------------------- EXPERIMENTAL CODE TO TRACK AUTOCORRELATION -------------------------------------
+            y_validation_ = self.y_validation.copy()
+            y_validation_['Prediction'] = self.y_val_pred_logistic
+            y_validation_['Prediction Probability'] = self.y_val_pred_logistic_proba
+            y_validation_['Residual'] = y_validation_[self.class_column] - y_validation_['Prediction Probability']
+            serial_correlation_dist = y_validation_.groupby('Ticker')['Residual'].apply(self.get_acf)
+            prop_ones = y_validation_.groupby('Ticker')['Prediction'].mean()
+            plot_data = pd.DataFrame({'ACF': serial_correlation_dist, 'Prop_1': prop_ones}).dropna()
+            weights_red = plot_data['Prop_1']
+            weights_blue = 1 - plot_data['Prop_1']
+
+            plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'], alpha=0.8)
+            plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker) la Logistic Regression', fontsize=14)
+            plt.show()
+#---------------------------------------------------------------------------------------------------------------
 
     def fit_ensemble(self, ensemble_type = 'logistic_regression'):
 
@@ -367,12 +431,50 @@ class ModelPipeline():
             y_val_voting_pred = (y_val_voting_proba >= self.classification_threshold).astype(int)
             y_val_voting_pred = y_val_voting_pred
 
-            cm = confusion_matrix(self.y_validation[self.class_column], y_val_voting_pred)
+            self.y_val_prediction = y_val_voting_pred
+            self.y_val_prediction_proba = y_val_voting_proba
+
+            y_validation_ = self.y_validation.copy()
+            y_validation_['Prediction'] = y_val_voting_pred
+
+            wins_bid_ask = y_validation_[(y_validation_['Bid Ask PNL'] >= 0) & (y_validation_['Prediction'] == 1)]['Bid Ask PNL']
+            loses_bid_ask = y_validation_[(y_validation_['Bid Ask PNL'] < 0) & (y_validation_['Prediction'] == 1)]['Bid Ask PNL']
+
+            wins_realistic = y_validation_[(y_validation_['Realistic PNL'] >= 0) & (y_validation_['Prediction'] == 1)]['Realistic PNL']
+            loses_realistic = y_validation_[(y_validation_['Realistic PNL'] < 0) & (y_validation_['Prediction'] == 1)]['Realistic PNL']
+
+
+            print(f'Bid-Ask Total wins: {round(wins_bid_ask.sum(), 2)}, Bid-Ask Total loses: {round(loses_bid_ask.sum(), 2)}, average win: {round(wins_bid_ask.mean(), 2)}, average loss: {round(loses_bid_ask.mean(), 2)}, num wins: {len(wins_bid_ask)}, num losses: {len(loses_bid_ask)}')
+            print(f'Realistic Total wins: {round(wins_realistic.sum(), 2)}, Realistic Total loses: {round(loses_realistic.sum(), 2)}, average win: {round(wins_realistic.mean(), 2)}, average loss: {round(loses_realistic.mean(), 2)}, num wins: {len(wins_realistic)}, num losses: {len(loses_realistic)}')
             
+
+            cm = confusion_matrix(self.y_validation[self.class_column], y_val_voting_pred)
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
-            plt.title(f'Confusion Matrix: Voting (Baseline: 41%)')
+            plt.title(f'Confusion Matrix: Voting (Baseline: {self.y_validation[self.class_column].mean()*100:.2f}%)')
             plt.show() 
+
+            plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].reset_index(drop=True).cumsum(), label = 'Bid-Ask PNL Equity Curve')
+            plt.title('Ensemble: Bid Ask PNL equity curve')
+            plt.show()
+
+            plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].reset_index(drop=True).cumsum(), label = 'Realistic PNL Equity Curve')
+            plt.title('Ensemble: Realistic PNL equity curve')
+            plt.show()
+
+            # Make a plot of the serial correlation of the residuals of the trades and non trades
+            y_validation_['Prediction Probability'] = y_val_voting_proba
+            y_validation_['Residual'] = y_validation_[self.class_column] - y_validation_['Prediction Probability']
+            serial_correlation_dist = y_validation_.groupby('Ticker')['Residual'].apply(self.get_acf)
+            prop_ones = y_validation_.groupby('Ticker')['Prediction'].mean()
+            plot_data = pd.DataFrame({'ACF': serial_correlation_dist, 'Prop_1': prop_ones}).dropna()
+
+            weights_red = plot_data['Prop_1']
+            weights_blue = 1 - plot_data['Prop_1']
+
+            plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'],alpha=0.8)
+            plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker)', fontsize=14)
+            plt.show()
 
         if ensemble_type == 'grnn':
             from a1_grnn import GRNN
@@ -549,5 +651,54 @@ class ModelPipeline():
             return Xy[[col for col in self.X_train.columns]], Xy[[self.class_column]]            
 
 
+    def run_correlation_matrix(self, X):
+        import seaborn as sns
+
+        corr_matrix = X.corr()
+
+        plt.figure(figsize=(12, 10))
+        sns.heatmap(corr_matrix, annot=True, fmt=".2f", cmap='coolwarm', cbar=True)
+        plt.title('Feature Correlation Matrix')
+        plt.show()
+
+    def get_acf(self, x):
+        # Calcoliamo la correlazione al lag 1 (trimestre precedente)
+        return x.autocorr(lag=1)
+
+    def return_predictions_validation(self):
+        return {
+            'y_val_pred_logistic': self.y_val_pred_logistic if hasattr(self, 'y_val_pred_logistic') else None,
+            'y_val_pred_logistic_proba': self.y_val_pred_logistic_proba if hasattr(self, 'y_val_pred_logistic_proba') else None,
+            'y_val_pred_xgboost': self.y_val_pred_xgboost if hasattr(self, 'y_val_pred_xgboost') else None,
+            'y_val_pred_xgboost_proba': self.y_val_pred_xgboost_proba if hasattr(self, 'y_val_pred_xgboost_proba') else None,
+            'y_val_pred_nn_seq': self.y_val_pred_nn_seq if hasattr(self, 'y_val_pred_nn_seq') else None,
+            'y_val_pred_nn_seq_proba': self.y_val_pred_nn_seq_proba if hasattr(self, 'y_val_pred_nn_seq_proba') else None,
+            'y_val_pred_model_embeddings': self.y_val_pred_model_embeddings if hasattr(self, 'y_val_pred_model_embeddings') else None,
+            'y_val_pred_model_embeddings_proba': self.y_val_pred_model_embeddings_proba if hasattr(self, 'y_val_pred_model_embeddings_proba') else None,
+            'y_val_pred_ada': self.y_val_pred_ada if hasattr(self, 'y_val_pred_ada') else None,
+            'y_val_pred_ada_proba': self.y_val_pred_ada_proba if hasattr(self, 'y_val_pred_ada_proba') else None,
+            'y_val_prediction': self.y_val_prediction if hasattr(self, 'y_val_prediction') else None,
+            'y_val_prediction_proba': self.y_val_prediction_proba if hasattr(self, 'y_val_prediction_proba') else None
+        }
+    
+    def return_predictions_test(self):
+        return {
+            'y_test_pred_logistic': self.y_test_pred_logistic if hasattr(self, 'y_test_pred_logistic') else None,
+            'y_test_pred_logistic_proba': self.y_test_pred_logistic_proba if hasattr(self, 'y_test_pred_logistic_proba') else None,
+            'y_test_pred_xgboost': self.y_test_pred_xgboost if hasattr(self, 'y_test_pred_xgboost') else None,
+            'y_test_pred_xgboost_proba': self.y_test_pred_xgboost_proba if hasattr(self, 'y_test_pred_xgboost_proba') else None,
+            'y_test_pred_nn_seq': self.y_test_pred_nn_seq if hasattr(self, 'y_test_pred_nn_seq') else None,
+            'y_test_pred_nn_seq_proba': self.y_test_pred_nn_seq_proba if hasattr(self, 'y_test_pred_nn_seq_proba') else None,
+            'y_test_pred_model_embeddings': self.y_test_pred_model_embeddings if hasattr(self, 'y_test_pred_model_embeddings') else None,
+            'y_test_pred_model_embeddings_proba': self.y_test_pred_model_embeddings_proba if hasattr(self, 'y_test_pred_model_embeddings_proba') else None,
+            'y_test_pred_ada': self.y_test_pred_ada if hasattr(self, 'y_test_pred_ada') else None,
+            'y_test_pred_ada_proba': self.y_test_pred_ada_proba if hasattr(self, 'y_test_pred_ada_proba') else None,
+            'y_test_prediction': self.y_test_prediction if hasattr(self, 'y_test_prediction') else None,
+            'y_test_prediction_proba': self.y_test_prediction_proba if hasattr(self, 'y_test_prediction_proba') else None
+        }
+
+
+
 if __name__ == '__main__':
-    ModelPipeline(plot_performance= True, classification_threshold= 0.5, polynomial_expansion_degree= 1, synthetic_data_multiplyer= 9, visualize_synthetic_data= False, run_hybrid= False, synthetic_generator= 'Sequential')
+    ModelPipeline(plot_correlation_matrix= False, plot_performance= True, class_column = 'Implied > Realized',classification_threshold= 0.5, polynomial_expansion_degree= 1, synthetic_data_multiplyer= 0, 
+                  visualize_synthetic_data= False, run_hybrid= True, synthetic_generator= 'Sequential')

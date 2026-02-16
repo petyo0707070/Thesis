@@ -53,26 +53,26 @@ class ScaleOptionData():
         #Here we can invoke all the different transformations :)
 
         # Remove the shittiest outliers
-        self.X_train = self.thin_right_tail(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put','Call Put Ratio', 'Kurt Delta', 'Skew Delta'], 'log', 99)
+        self.X_train = self.thin_right_tail(self.X_train, ['Hawkes', 'Reversability', 'Vol Ratio', 'Idiosyncratic Vol', 'Earnings Std (8)', 'Abnormal Volume Call', 'Abnormal Volume Put','Call Put Ratio', 'Kurt Delta', 'Skew Delta'], 'log', 99)
 
         # Some columns have a theoretical reason / actually are remotely normally distributed, we make our life really easy by apply the Normal CDF
-        self.X_train = self.apply_normal_scaler(self.X_train, ['Beta', 'Implied Move', 'Implied Vol', 'PNL Bid Ask (8)', 'PNL Realistic (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'])
+        self.X_train = self.apply_normal_scaler(self.X_train, ['RSI', 'Earnings Std (8)' ,'Beta', 'Implied Move', 'Implied Vol', 'PNL Bid Ask (8)', 'PNL Realistic (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'])
         
         # Get rid of some shitty negative outliers
         self.X_train = self.thin_left_tail(self.X_train, ['Kurt Delta', 'Skew Delta'], 'cubic_root', 1)
 
 
         # Apply Power scaler for the heavily skewed positive distributions
-        self.X_train = self.apply_power_scaler(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put','ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'IV Slope', 'Vix', 'Call Put Ratio']) 
+        self.X_train = self.apply_power_scaler(self.X_train, ['Hawkes', 'Reversability', 'Vol Ratio', 'Idiosyncratic Vol', 'Abnormal Volume Call', 'Abnormal Volume Put','ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'IV Slope', 'Vix', 'Call Put Ratio']) 
         # Some of the resulting columns become Normally Distributed so we apply CDF to map them to [0, 1] -> [-1,1]
-        self.X_train = self.apply_normal_cdf(self.X_train, ['Call Put Ratio','Vix'])
+        self.X_train = self.apply_normal_cdf(self.X_train, ['Hawkes', 'Vol Ratio','Call Put Ratio','Vix'])
 
         # Apply Hyperbolic tangent transformation kiils a lot of the skewness but not always produces nicely uniformally distributed features
         self.X_train = self.apply_tail_transformation(self.X_train, ['Kurt Delta', 'Skew Delta'], 'logistic')
         
 
         # Use the min-max scaler to map the more nicely behaved features to [-1,1]
-        self.X_train = self.apply_min_max_scaler(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Call Put Ratio', 'Day Of Week','IV Slope', 'Log Market Cap', 'Call Put Ratio','Vix'])
+        self.X_train = self.apply_min_max_scaler(self.X_train, ['Hawkes', 'Reversability', 'Vol Ratio', 'Idiosyncratic Vol', 'Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Call Put Ratio', 'Day Of Week','IV Slope', 'Log Market Cap', 'Call Put Ratio','Vix'])
 
         self.X_validation = self.transform_oos_data(self.X_validation)
         self.X_test = self.transform_oos_data(self.X_test)
@@ -82,9 +82,9 @@ class ScaleOptionData():
         df_train_validation_test = pd.concat([df_train_validation, self.X_test], axis = 0)
 
 
-        self.X_train_tensor = self.transform_to_tensor(self.X_train, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', train_start_date)
-        self.X_validation_tensor = self.transform_to_tensor(df_train_validation, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', train_end_date )
-        self.X_test_tensor = self.transform_to_tensor(df_train_validation_test, ['Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', validation_end_date)
+        self.X_train_tensor = self.transform_to_tensor(self.X_train, ['Hawkes', 'Reversability', 'RSI', 'Vol Ratio', 'Idiosyncratic Vol', 'Earnings Std (8)', 'Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', train_start_date)
+        self.X_validation_tensor = self.transform_to_tensor(df_train_validation, ['Hawkes', 'Reversability', 'RSI', 'Vol Ratio', 'Idiosyncratic Vol', 'Earnings Std (8)', 'Abnormal Volume Call', 'Abnormal Volume Put', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio',  'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix', 'PNL Bid Ask (8)', 'Realized Move Pct (1)', 'Realized Move Pct (2)'], 'padding', train_end_date )
+        self.X_test_tensor = self.transform_to_tensor(df_train_validation_test, ['Hawkes', 'Reversability', 'RSI', 'Vol Ratio', 'Idiosyncratic Vol', 'Earnings Std (8)', 	'Abnormal Volume Call', 	'Abnormal Volume Put','ATM Call Open Interest Ratio','ATM Put Open Interest Ratio','Beta','Call Put Ratio','Skew Delta','Implied Move','Implied Vol','IV Slope','Log Market Cap','Vix','PNL Bid Ask (8)','Realized Move Pct (1)','Realized Move Pct (2)'], 	'padding' , validation_end_date)
 
 
         #self.explore_entropy(self.X_validation, self.y_validation)

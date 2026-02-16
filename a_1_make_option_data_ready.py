@@ -3,7 +3,9 @@ import os
 import datetime as dt
 import sys
 import numpy as np
-
+import math
+import scipy
+import pandas_ta as ta
 
 
 class PartionOptionData():
@@ -200,7 +202,11 @@ class CalculateFeatureMatrixes():
         self.vix_ = pd.read_csv(r'D:\Option Data\feature_matrixes\vix.csv', index_col = 0)
         self.date = pd.read_csv(r'D:\Option Data\feature_matrixes\date.csv', index_col = 0, dtype=object)
 
-
+        self.hawkes = pd.read_csv(r'D:\Option Data\feature_matrixes\a_hawkes.csv', index_col = 0)
+        self.reversability = pd.read_csv(r'D:\Option Data\feature_matrixes\a_reversability.csv', index_col = 0)
+        self.rsi  = pd.read_csv(r'D:\Option Data\feature_matrixes\a_rsi.csv', index_col = 0)
+        self.vol_ratio = pd.read_csv(r'D:\Option Data\feature_matrixes\a_vol_ratio.csv', index_col = 0)
+        self.idiosyncratic_vol = pd.read_csv(r'D:\Option Data\feature_matrixes\a_idiosyncratic_vol.csv', index_col = 0)
 
 
         self.pnl_bid_ask_df = pd.read_csv(r'D:\Option Data\feature_matrixes\pnl_bid_ask_backtest.csv', index_col = 0)
@@ -266,11 +272,17 @@ class CalculateFeatureMatrixes():
                 date_t0_2months_ago = date_t0_ts - pd.DateOffset(months = 2)
                 stock_ticker = stock_ticker_df[(stock_ticker_df['DlyCalDt'] >= date_t0_2months_ago) & (stock_ticker_df['DlyCalDt'] <=date_t0)].copy()
                 # We will use it to calculate the beta to the overall market
+                reversability_t0 = self.perm_ts_reversibility(np.array(stock_ticker['DlyClose'].values))
+                hawkes_t0 = self.hawkes_process(stock_ticker['DlyClose'], 0.1).iloc[-1] # Get the Hawkes Process Value at t = 0, we will use a kappa of 0.1 which is pretty standard in the literature
+                rsi_t0 = ta.rsi(stock_ticker['DlyClose'], length = 14).iloc[-1] # Get the RSI at t = 0, we will use a length of 14 which is pretty standard in the literature
                 stock_ticker['Return_Stock'] = (stock_ticker['DlyClose'] - stock_ticker['DlyClose'].shift(1) ) / stock_ticker['DlyClose'].shift(1) # Calculate the Return of the Stock
                 stock_ticker = stock_ticker.merge(self.sp500[['DlyCalDt', 'Return']], left_on = 'DlyCalDt', right_on = 'DlyCalDt', how = 'left') # Merge with the SP 500 Returns
                 stock_ticker = stock_ticker.dropna(subset = ['Return']) # Drop NAs
                 stock_ticker = stock_ticker.dropna(subset = ['Return_Stock']) # Drop NAs
+
                 beta = stock_ticker['Return_Stock'].cov(stock_ticker['Return']) / stock_ticker['Return'].var() # Beta = Cov(X, Y) / Var(X)
+                vol_ratio_t0 = stock_ticker[stock_ticker['Return_Stock'] > 0]['Return_Stock'].std() / stock_ticker[stock_ticker['Return_Stock'] <= 0]['Return_Stock'].std() if stock_ticker[stock_ticker['Return_Stock'] < 0]['Return_Stock'].std() > 0 else np.nan # Vol Ratio = Std of Positive Returns / Std of Negative Returns
+                idiosyncratic_vol_t0 = np.sqrt(252) * np.sqrt(stock_ticker['Return_Stock'].var() - beta**2 * stock_ticker['Return'].var()) if stock_ticker['Return_Stock'].var() - beta**2 * stock_ticker['Return'].var() > 0 else np.nan # Idiosyncratic Vol = Std of Stock Returns - Beta * Std of Market Returns
 
 
                 realized_move = np.abs(close_t1 - close_t0)
@@ -501,6 +513,15 @@ class CalculateFeatureMatrixes():
                 self.pnl_bid_ask_df.loc[t, q_string] = bid_ask_straddle_pnl
                 self.pnl_realistic_df.loc[t, q_string] = realistic_straddle_pnl
 
+                self.hawkes.loc[t, q_string] = hawkes_t0
+                self.reversability.loc[t, q_string] = reversability_t0
+                self.rsi.loc[t, q_string]  = rsi_t0
+                self.vol_ratio.loc[t, q_string] = vol_ratio_t0
+                self.idiosyncratic_vol.loc[t, q_string] = idiosyncratic_vol_t0
+
+
+
+
 
 
         self.abnormal_volume_call.to_csv(r'D:\Option Data\feature_matrixes\abnormal_volume_call.csv', index = True)
@@ -523,7 +544,78 @@ class CalculateFeatureMatrixes():
         self.date.to_csv(r'D:\Option Data\feature_matrixes\date.csv',index = True)
         self.pnl_bid_ask_df.to_csv(r'D:\Option Data\feature_matrixes\pnl_bid_ask_backtest.csv',index = True)
         self.pnl_realistic_df.to_csv(r'D:\Option Data\feature_matrixes\pnl_realistic_backtest.csv',index = True)
-                
+
+        self.hawkes.to_csv(r'D:\Option Data\feature_matrixes\a_hawkes.csv', index = True)
+        self.reversability.to_csv(r'D:\Option Data\feature_matrixes\a_reversability.csv', index = True)
+        self.rsi.to_csv(r'D:\Option Data\feature_matrixes\a_rsi.csv', index = True)
+        self.vol_ratio.to_csv(r'D:\Option Data\feature_matrixes\a_vol_ratio.csv', index = True)
+        self.idiosyncratic_vol.to_csv(r'D:\Option Data\feature_matrixes\a_idiosyncratic_vol.csv', index = True)
+
+
+
+    def ordinal_patterns(self, arr: np.array, d: int) -> np.array:
+        assert(d >= 2)
+        fac = math.factorial(d)
+        d1 = d - 1
+        mults = []
+        for i in range(1, d):
+            mult = fac / math.factorial(i + 1)
+            mults.append(mult)
+
+        # Create array to put ordinal pattern in
+        ordinals = np.empty(len(arr))
+        ordinals[:] = np.nan
+
+        for i in range(d1, len(arr)):
+            dat = arr[i - d1:  i+1]
+            pattern_ordinal = 0
+            for l in range(1, d):
+                count = 0
+                for r in range(l):
+                    if dat[d1 - l] >= dat[d1 - r]:
+                        count += 1
+
+                pattern_ordinal += count * mults[l - 1]
+            ordinals[i] = int(pattern_ordinal)
+
+        return ordinals
+
+    def perm_ts_reversibility(self, arr: np.array):
+        # Zanin, M.; Rodríguez-González, A.; Menasalvas Ruiz, E.; Papo, D. Assessing time series reversibility through permutation
+        
+        # Should be fairly large array, very least ~60
+        assert(len(arr) >= 10)
+        rev_arr = np.flip(arr)
+    
+        # [2:] drops 2 nan values off start of val
+        pats = self.ordinal_patterns(arr, 3)[2:].astype(int)
+        r_pats = self.ordinal_patterns(rev_arr, 3)[2:].astype(int)
+    
+        # pdf of patterns, forward and reverse time
+        n = len(arr) - 2
+        p_f = np.bincount(pats, minlength=6) / n 
+        p_r = np.bincount(r_pats, minlength=6) / n
+
+        if min(np.min(p_f), np.min(p_r)) > 0.0:
+            rev = scipy.special.rel_entr(p_f, p_r).sum()
+        else:
+            rev = np.nan
+            
+        return rev
+
+    def hawkes_process(self, data, kappa):
+        assert(kappa > 0.0)
+        alpha = np.exp(-kappa)
+        arr = data.to_numpy()
+        output = np.zeros(len(data))
+        output[:] = np.nan
+        for i in range(1, len(data)):
+            if np.isnan(output[i - 1]):
+                output[i] = arr[i]
+            else:
+                output[i] = output[i - 1] * alpha + arr[i]
+        return pd.Series(output, index=data.index) * kappa
+
 
     def event_expected_move(self, iv1, iv2, t1, t2, te):
 
@@ -649,6 +741,12 @@ class CalculateFeatureMatrixes():
         self.pnl_bid_ask_df.loc[ticker, quarter] = np.nan
         self.pnl_realistic_df.loc[ticker, quarter] = np.nan
 
+        self.hawkes.loc[ticker, quarter] = np.nan
+        self.reversability.loc[ticker, quarter] = np.nan
+        self.rsi.loc[ticker, quarter]  = np.nan
+        self.vol_ratio.loc[ticker, quarter] = np.nan
+        self.idiosyncratic_vol.loc[ticker, quarter] = np.nan
+
 
 class FlattenFeatures():
 
@@ -674,10 +772,15 @@ class FlattenFeatures():
         self.pnl_bid_ask = pd.read_csv(r'D:\Option Data\feature_matrixes\pnl_bid_ask_backtest.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\pnl_bid_ask_backtest.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\pnl_bid_ask_backtest.csv', index_col =0)
         self.pnl_realistic = pd.read_csv(r'D:\Option Data\feature_matrixes\pnl_realistic_backtest.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\pnl_realistic_backtest.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\pnl_realistic_backtest.csv', index_col =0)
         
+        self.hawkes = pd.read_csv(r'D:\Option Data\feature_matrixes\a_hawkes.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\a_hawkes.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\a_hawkes.csv', index_col =0)
+        self.reversability = pd.read_csv(r'D:\Option Data\feature_matrixes\a_reversability.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\a_reversability.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\a_reversability.csv', index_col =0)
+        self.rsi  = pd.read_csv(r'D:\Option Data\feature_matrixes\a_rsi.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\a_rsi.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\a_rsi.csv', index_col =0)
+        self.vol_ratio = pd.read_csv(r'D:\Option Data\feature_matrixes\a_vol_ratio.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\a_vol_ratio.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\a_vol_ratio.csv', index_col =0)
+        self.idiosyncratic_vol = pd.read_csv(r'D:\Option Data\feature_matrixes\a_idiosyncratic_vol.csv', index_col = 0) if os.path.exists(r'D:\Option Data\feature_matrixes\a_idiosyncratic_vol.csv') else pd.read_csv(r'M:\OE0855\PB\Bund Project\Th\a_idiosyncratic_vol.csv', index_col =0)
 
-        self.df_X = pd.DataFrame( columns= ['Ticker', 'Q-String', 'Date','Abnormal Volume Call', 'Abnormal Volume Put', 'After Market', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Day Of Week', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix'])
+        self.df_X = pd.DataFrame( columns= ['Ticker', 'Q-String', 'Date', 'Hawkes', 'Reversability', 'RSI', 'Vol Ratio', 'Idiosyncratic Vol', 'Abnormal Volume Call', 'Abnormal Volume Put', 'After Market', 'ATM Call Open Interest Ratio', 'ATM Put Open Interest Ratio', 'Beta', 'Call Put Ratio', 'Day Of Week', 'Kurt Delta', 'Skew Delta', 'Implied Move', 'Implied Vol', 'IV Slope', 'Log Market Cap', 'Vix'])
         self.df_X_auxiliary = pd.DataFrame(columns = ['Ticker', 'Q-String', 'Realized Move Pct', 'Realized Move Pct Abs', 'PNL Bid-Ask', 'PNL Realistic'])
-        self.df_y = pd.DataFrame(columns = ['Ticker', 'Q-String', 'Realized Move Pct', 'Realized Move Pct Abs'])
+        self.df_y = pd.DataFrame(columns = ['Ticker', 'Q-String', 'Realized Move Pct', 'Realized Move Pct Abs', 'Bid Ask PNL', 'Realistic PNL','Implied Move'])
 
         self.verbose = verbose
 
@@ -701,6 +804,12 @@ class FlattenFeatures():
                 #print(f'Index is {index}, col is {col}')
 
                 # Extract all the values from the feature matrixes for the current ticker and quarter
+                hawkes_ = self.hawkes.loc[index, col]
+                reversability_ = self.reversability.loc[index, col]
+                rsi_ = self.rsi.loc[index, col]
+                vol_ratio_ = self.vol_ratio.loc[index, col]
+                idiosyncratic_vol_ = self.idiosyncratic_vol.loc[index, col]
+
                 abnormal_volume_call_ = self.abnormal_volume_call.loc[index, col]
                 abnormal_volume_put_ = self.abnormal_volume_put.loc[index, col]
                 after_market_ = self.after_market.loc[index, col]
@@ -722,7 +831,7 @@ class FlattenFeatures():
                 pnl_realistic_ = self.pnl_realistic.loc[index, col]
 
                 # Create the new row as a DataFrame that will be appended to the end of the flattened dataframe
-                new_df_X_row = [index, col, date_event, abnormal_volume_call_, abnormal_volume_put_, after_market_, atm_call_open_interest_ratio_, atm_put_open_interest_ratio_, beta_, call_put_ratio_, day_of_week_, implied_kurt_change_, implied_skew_change_, implied_move_, implied_vol_, iv_slope_, log_market_cap_, vix_value]
+                new_df_X_row = [index, col, date_event, hawkes_, reversability_, rsi_, vol_ratio_, idiosyncratic_vol_, abnormal_volume_call_, abnormal_volume_put_, after_market_, atm_call_open_interest_ratio_, atm_put_open_interest_ratio_, beta_, call_put_ratio_, day_of_week_, implied_kurt_change_, implied_skew_change_, implied_move_, implied_vol_, iv_slope_, log_market_cap_, vix_value]
                 new_df_X_row = pd.DataFrame([new_df_X_row], columns = self.df_X.columns)
                 rows_X.append(new_df_X_row.iloc[0])
 
@@ -731,7 +840,7 @@ class FlattenFeatures():
                 new_df_X_auxiliary_row = pd.DataFrame([new_df_X_auxiliary_row], columns = self.df_X_auxiliary.columns)
                 rows_X_auxiliary.append(new_df_X_auxiliary_row.iloc[0])
 
-                new_y_row = [index, col, realized_move_pct_, realized_move_pct_abs_]
+                new_y_row = [index, col, realized_move_pct_, realized_move_pct_abs_, pnl_bid_ask_, pnl_realistic_, implied_move_]
                 new_y_row = pd.DataFrame([new_y_row], columns = self.df_y.columns)
                 rows_y.append(new_y_row.iloc[0])
 
@@ -760,6 +869,7 @@ class FlattenFeatures():
 
         pnl_bid_ask_8_list = []
         pnl_realistic_8_list = []
+        earnings_std_list = []
         realized_move_pct_1_list = []
         realized_move_pct_2_list = []
         realized_move_pct_abs_1_list = []
@@ -786,6 +896,7 @@ class FlattenFeatures():
             if auxiliary_info.empty: # If no previous events exist than we will add NA values         
                 pnl_bid_ask_8 = np.nan
                 pnl_realistic_8 = np.nan
+                earnings_std = np.nan
                 realized_move_pct_1 = np.nan
                 realized_move_pct_2 = np.nan
                 realized_move_pct_abs_1 = np.nan
@@ -794,6 +905,7 @@ class FlattenFeatures():
             # Get the values of the lagged variables 
             pnl_bid_ask_8 = auxiliary_info['PNL Bid-Ask'].sum() / len(auxiliary_info)
             pnl_realistic_8 = auxiliary_info['PNL Realistic'].sum() / len(auxiliary_info)
+            earnings_std = auxiliary_info['Realized Move Pct'].std()
             realized_move_pct_1 = auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]['Realized Move Pct'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]) == 1 else np.nan
             realized_move_pct_2 = auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]['Realized Move Pct'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]) == 1 else np.nan
             realized_move_pct_abs_1 = auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]['Realized Move Pct Abs'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]) == 1 else np.nan
@@ -802,6 +914,7 @@ class FlattenFeatures():
             # Add the values of the lagged variables to the respective list so that we can add it to the X values
             pnl_bid_ask_8_list.append(pnl_bid_ask_8)
             pnl_realistic_8_list.append(pnl_realistic_8)
+            earnings_std_list.append(earnings_std)
             realized_move_pct_1_list.append(realized_move_pct_1)
             realized_move_pct_2_list.append(realized_move_pct_2)
             realized_move_pct_abs_1_list.append(realized_move_pct_abs_1)
@@ -810,6 +923,7 @@ class FlattenFeatures():
         # Incorporate the lagged variables into the overall X matrix
         self.df_X['PNL Bid Ask (8)'] = pnl_bid_ask_8_list
         self.df_X['PNL Realistic (8)'] = pnl_realistic_8_list
+        self.df_X['Earnings Std (8)'] = earnings_std_list
         self.df_X['Realized Move Pct (1)'] = realized_move_pct_1_list
         self.df_X['Realized Move Pct (2)'] = realized_move_pct_2_list
         self.df_X['Realized Move Pct Abs (1)'] = realized_move_pct_abs_1_list
@@ -820,14 +934,16 @@ class FlattenFeatures():
         self.df_y.drop(['Quarter', 'Previous Quarter', 'Quarter 2 Ago', 'Starting Quarter 2 Years Ago'], axis = 'columns', inplace= True)
         self.df_X['Date'] = pd.to_datetime(self.df_X['Date']).dt.normalize()
         self.df_y['Date'] = self.df_X['Date'].values
+        self.df_y['Profitable Trade'] = self.df_y['Bid Ask PNL'] > 0.05
+        self.df_y['Implied > Realized'] = self.df_y['Implied Move'] > self.df_y['Realized Move Pct Abs']
 
-        self.df_X = self.df_X[self.df_X['Date'] >= '2016-01-01'].reset_index(drop = True)
-        self.df_y = self.df_y[self.df_y['Date'] >= '2016-01-01'].reset_index(drop = True)
+        #self.df_X = self.df_X[self.df_X['Date'] >= '2016-01-01'].reset_index(drop = True)
+        #self.df_y = self.df_y[self.df_y['Date'] >= '2016-01-01'].reset_index(drop = True)
         self.df_X = self.df_X.replace([np.inf, -np.inf], np.nan) # There is some chance we end up with Inf or - Inf values therefore we want to replace them with np.nan
 
 
-        self.df_X.to_csv('X_1.csv', index = False)
-        self.df_y.to_csv('y_1.csv', index = False)
+        self.df_X.to_csv(r'D:\Option Data\unscaled_features\X_1.csv', index = False)
+        self.df_y.to_csv(r'D:\Option Data\unscaled_features\y_1.csv', index = False)
 
 if __name__ == '__main__':
     #PartionOptionData()
