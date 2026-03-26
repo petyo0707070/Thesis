@@ -7,7 +7,8 @@ from tensorflow.keras import layers, models, callbacks
 import sys
 import matplotlib.pyplot as plt
 from xgboost import XGBClassifier
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, precision_recall_curve, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, precision_recall_curve, precision_score, \
+    recall_score, f1_score, roc_auc_score, average_precision_score
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
 from itertools import combinations_with_replacement
@@ -19,10 +20,14 @@ import seaborn as sns
 
 
 class ModelPipeline():
-    def __init__(self, class_column = 'Profitable Trade', plot_performance = True, classification_threshold = 0.5, polynomial_expansion_degree = 1, permutation_test = False, 
-                 run_logistic = True, run_xgboost = True, run_hybrid = True, run_ada = True, synthetic_data_multiplyer = 0, visualize_synthetic_data = False, synthetic_generator = 'GAN',
-                 plot_correlation_matrix = False, train_start_date = '2016-01-01', train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date = '2024-12-31',
-                 no_plotting = False, feature_importance = False, run_automl = False, h2o_top_n_models = 3, h2o_min_recall = 0.05):
+    def __init__(self, class_column='Profitable Trade', plot_performance=True, classification_threshold=0.5,
+                 polynomial_expansion_degree=1, permutation_test=False,
+                 run_logistic=True, run_xgboost=True, run_hybrid=True, run_ada=True, synthetic_data_multiplyer=0,
+                 visualize_synthetic_data=False, synthetic_generator='GAN',
+                 plot_correlation_matrix=False, train_start_date='2016-01-01', train_end_date='2020-12-31',
+                 validation_end_date='2022-12-31', test_end_date='2024-12-31',
+                 no_plotting=False, feature_importance=False, run_automl=False, h2o_top_n_models=3,
+                 h2o_min_recall=0.05):
 
         # Foundational parameters for the Option scaler
         self.train_start_date = train_start_date
@@ -32,8 +37,8 @@ class ModelPipeline():
 
         # Whether to plot the correlation mattrix of the training features
         self.plot_correlation_matrix = plot_correlation_matrix
-        self.no_plotting = no_plotting # This disables all plotting
-        self.feature_importance = feature_importance # Whether to run the SHAP feature importance at the end of the pipeline, only works for tree based models and not for the Hybrid Model for now
+        self.no_plotting = no_plotting  # This disables all plotting
+        self.feature_importance = feature_importance  # Whether to run the SHAP feature importance at the end of the pipeline, only works for tree based models and not for the Hybrid Model for now
 
         # This will take care of creating synthetic data
         if synthetic_data_multiplyer > 0:
@@ -44,7 +49,6 @@ class ModelPipeline():
         else:
             self.use_synthetic_data = False
 
-
         # Housekeeping to determine whether polynomial expansion will be used
         if polynomial_expansion_degree > 1:
             self.polynomial_expansion_degree = polynomial_expansion_degree
@@ -52,48 +56,49 @@ class ModelPipeline():
         else:
             self.use_poly_expansion = False
 
-
-        self.run_logistic = run_logistic # Whether to fit a Logistic Regression model
-        self.run_xgboost = run_xgboost #Whether to fit an XGBoost model
-        self.run_hybrid = run_hybrid # Whether to fit the Hybrid Model -> Get a seq_nn and  XGBoost with embeddings
-        self.run_ada = run_ada # Whether to fit an ADA Boosted Decision Tree Model
-        self.class_column = class_column # Define the class we want to classify
+        self.run_logistic = run_logistic  # Whether to fit a Logistic Regression model
+        self.run_xgboost = run_xgboost  # Whether to fit an XGBoost model
+        self.run_hybrid = run_hybrid  # Whether to fit the Hybrid Model -> Get a seq_nn and  XGBoost with embeddings
+        self.run_ada = run_ada  # Whether to fit an ADA Boosted Decision Tree Model
+        self.class_column = class_column  # Define the class we want to classify
         self.run_automl = run_automl
         self.h2o_top_n_models = h2o_top_n_models
         self.h2o_min_recall = h2o_min_recall
 
-        self.permutation_test = permutation_test # Decide whether to run a permutation test
-        self.plot_performance = plot_performance # Whether we will plot Confusion matrixes per model , NN performance over epochs etc...
-        self.classification_threshold = classification_threshold # What % do we need to classify as a 1
+        self.permutation_test = permutation_test  # Decide whether to run a permutation test
+        self.plot_performance = plot_performance  # Whether we will plot Confusion matrixes per model , NN performance over epochs etc...
+        self.classification_threshold = classification_threshold  # What % do we need to classify as a 1
         self.val_pred_probs = []
         self.test_pred_probs = []
 
-
-        option_scaler = ScaleOptionData(return_raw= True, train_start_date = self.train_start_date, train_end_date = self.train_end_date, validation_end_date = self.validation_end_date, test_end_date=self.test_end_date) # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
-        self.X_train_, self.X_validation_, self.X_test_ = option_scaler.return_X() # Get the X feature matrix for the train, validation and test
+        option_scaler = ScaleOptionData(return_raw=False, train_start_date=self.train_start_date,
+                                        train_end_date=self.train_end_date,
+                                        validation_end_date=self.validation_end_date,
+                                        test_end_date=self.test_end_date)  # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
+        self.X_train_, self.X_validation_, self.X_test_ = option_scaler.return_X()  # Get the X feature matrix for the train, validation and test
 
         # For some reason I had to reset the index
-        self.X_train_.reset_index(inplace= True, drop = True)
-        self.X_validation_.reset_index(inplace= True, drop = True)
-        self.X_test_.reset_index(inplace= True, drop = True)
-        self.y_train, self.y_validation, self.y_test = option_scaler.return_y() # Get the y for training, validation and test
+        self.X_train_.reset_index(inplace=True, drop=True)
+        self.X_validation_.reset_index(inplace=True, drop=True)
+        self.X_test_.reset_index(inplace=True, drop=True)
+        self.y_train, self.y_validation, self.y_test = option_scaler.return_y()  # Get the y for training, validation and test
         self.y_train.reset_index(inplace=True, drop=True)
         self.y_validation.reset_index(inplace=True, drop=True)
         self.y_test.reset_index(inplace=True, drop=True)
 
         # Drop columns which we will not use for fitting the model
-        self.X_train = self.X_train_[[col for col in self.X_train_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
-        self.X_validation = self.X_validation_[[col for col in self.X_validation_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]   
-        self.X_test = self.X_test_[[col for col in self.X_test_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]   
-   
+        self.X_train = self.X_train_[[col for col in self.X_train_.columns if
+                                      col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
+        self.X_validation = self.X_validation_[[col for col in self.X_validation_.columns if
+                                                col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
+        self.X_test = self.X_test_[[col for col in self.X_test_.columns if
+                                    col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
 
-#-----------------------------------THIS OVERWRITES THE CLASS TO USE REALISTIC PNL TO SEE HOW THE MODEL IMPROVES------------------------------------------------------------------------------------
-        self.y_train[self.class_column] = self.y_train['Realistic PNL'] >= 0.15
-        self.y_validation[self.class_column] = self.y_validation['Realistic PNL'] >= 0.15
-        self.y_test[self.class_column] = self.y_test['Realistic PNL'] >= 0.15
-#-----------------------------------------------------------------------------------------------------------------------
-
-
+        # -----------------------------------THIS OVERWRITES THE CLASS TO USE REALISTIC PNL TO SEE HOW THE MODEL IMPROVES------------------------------------------------------------------------------------
+        self.y_train[self.class_column] = self.y_train['Realistic PNL'] >= 0.0
+        self.y_validation[self.class_column] = self.y_validation['Realistic PNL'] >= 0.0
+        self.y_test[self.class_column] = self.y_test['Realistic PNL'] >= 0.0
+        # -----------------------------------------------------------------------------------------------------------------------
 
         # Implements the generation of synthetic data that would perhaps be useful to train better generalizable models
         if self.use_synthetic_data:
@@ -101,11 +106,11 @@ class ModelPipeline():
 
             if self.synthetic_generator == 'Sequential':
                 self.Xy_train['Ticker'] = self.X_train_['Ticker'].values
-                self.Xy_train['Seq Count'] = self.X_train_.groupby('Ticker').cumcount()# + 1
+                self.Xy_train['Seq Count'] = self.X_train_.groupby('Ticker').cumcount()  # + 1
 
             self.Xy_train[self.class_column] = self.y_train[self.class_column].values
 
-            self.X_train, self.y_train = self.generate_synthetic_data(self.Xy_train, generator = self.synthetic_generator)
+            self.X_train, self.y_train = self.generate_synthetic_data(self.Xy_train, generator=self.synthetic_generator)
             print(self.X_train)
             print(self.y_train)
 
@@ -114,32 +119,41 @@ class ModelPipeline():
         self.X_validation_masked = self.X_validation.fillna(2)
         self.X_test_masked = self.X_test.fillna(2)
 
-
-        self.X_train_tensor, self.X_validation_tensor, self.X_test_tensor = option_scaler.return_tensors() # Get tensors of  the training, validation and test data
-        self.split_train_tensor() # Create a X_train_train and X_train_validation tensor
+        self.X_train_tensor, self.X_validation_tensor, self.X_test_tensor = option_scaler.return_tensors()  # Get tensors of  the training, validation and test data
+        self.split_train_tensor()  # Create a X_train_train and X_train_validation tensor
 
         if self.plot_correlation_matrix:
             self.run_correlation_matrix(self.X_train)
 
-        print(f'y_train: {self.y_train.shape}, X_train: {self.X_train.shape}, X_train_tensor: {self.X_train_tensor.shape}')
-        print(f'y_validation: {self.y_validation.shape}, X_train: {self.X_validation.shape}, X_validation_tensor: {self.X_validation_tensor.shape}')
-
+        print(
+            f'y_train: {self.y_train.shape}, X_train: {self.X_train.shape}, X_train_tensor: {self.X_train_tensor.shape}')
+        print(
+            f'y_validation: {self.y_validation.shape}, X_train: {self.X_validation.shape}, X_validation_tensor: {self.X_validation_tensor.shape}')
 
         # Implement a polynomial expansion if I decide to
         if self.use_poly_expansion:
-            self.X_train_tensor = self.get_polynomial_expanded_tensor(self.X_train_tensor, self.polynomial_expansion_degree)
-            self.X_validation_tensor = self.get_polynomial_expanded_tensor(self.X_validation_tensor, self.polynomial_expansion_degree)
-            self.X_test_tensor = self.get_polynomial_expanded_tensor(self.X_test_tensor, self.polynomial_expansion_degree)
-            self.X_train_train_tensor = self.get_polynomial_expanded_tensor(self.X_train_train_tensor, self.polynomial_expansion_degree)
-            self.X_train_validation_tensor = self.get_polynomial_expanded_tensor(self.X_train_validation_tensor, self.polynomial_expansion_degree)
+            self.X_train_tensor = self.get_polynomial_expanded_tensor(self.X_train_tensor,
+                                                                      self.polynomial_expansion_degree)
+            self.X_validation_tensor = self.get_polynomial_expanded_tensor(self.X_validation_tensor,
+                                                                           self.polynomial_expansion_degree)
+            self.X_test_tensor = self.get_polynomial_expanded_tensor(self.X_test_tensor,
+                                                                     self.polynomial_expansion_degree)
+            self.X_train_train_tensor = self.get_polynomial_expanded_tensor(self.X_train_train_tensor,
+                                                                            self.polynomial_expansion_degree)
+            self.X_train_validation_tensor = self.get_polynomial_expanded_tensor(self.X_train_validation_tensor,
+                                                                                 self.polynomial_expansion_degree)
 
             self.X_train = self.get_polynomial_expanded_features(self.X_train, self.polynomial_expansion_degree)
-            self.X_validation = self.get_polynomial_expanded_features(self.X_validation, self.polynomial_expansion_degree)
+            self.X_validation = self.get_polynomial_expanded_features(self.X_validation,
+                                                                      self.polynomial_expansion_degree)
             self.X_test = self.get_polynomial_expanded_features(self.X_test, self.polynomial_expansion_degree)
 
-            self.X_train_masked = self.get_polynomial_expanded_features(self.X_train_masked, self.polynomial_expansion_degree)
-            self.X_validation_masked = self.get_polynomial_expanded_features(self.X_validation_masked, self.polynomial_expansion_degree)
-            self.X_test_masked = self.get_polynomial_expanded_features(self.X_test_masked, self.polynomial_expansion_degree)
+            self.X_train_masked = self.get_polynomial_expanded_features(self.X_train_masked,
+                                                                        self.polynomial_expansion_degree)
+            self.X_validation_masked = self.get_polynomial_expanded_features(self.X_validation_masked,
+                                                                             self.polynomial_expansion_degree)
+            self.X_test_masked = self.get_polynomial_expanded_features(self.X_test_masked,
+                                                                       self.polynomial_expansion_degree)
 
         ''' 
         if self.run_automl:
@@ -155,78 +169,80 @@ class ModelPipeline():
             self.fit_logistic_regression()
 
         if self.run_xgboost:
-            self.fit_xgboost() # Run the XGBoost model
-            if self.feature_importance: # If we want feature importance we run the SHAP here
-                self.shap_feature_importance(model = self.model_xgboost, X = self.X_validation)
+            self.fit_xgboost()  # Run the XGBoost model
+            if self.feature_importance:  # If we want feature importance we run the SHAP here
+                self.shap_feature_importance(model=self.model_xgboost, X=self.X_validation)
+
+        if self.run_ada:
+            self.fit_ada_boost()
 
         if self.permutation_test:
-            self.run_permutation_test(model = self.model_xgboost, X = self.X_train, y = self.y_train)
-        
+            self.run_permutation_test(model=self.model_xgboost, X=self.X_train, y=self.y_train)
+
         if self.run_hybrid:
             self.fit_hybrid_model()
 
-        self.fit_ensemble(ensemble_type = 'soft_voting')
+        self.fit_ensemble(ensemble_type='soft_voting')
 
     def fit_hybrid_model(self):
         pad_value = 2
         timesteps = self.X_train_tensor.shape[1]
         n_features = self.X_train_tensor.shape[2]
 
-
-        pr_auc = tf.keras.metrics.AUC(curve = 'PR', name = 'pr_auc')
+        pr_auc = tf.keras.metrics.AUC(curve='PR', name='pr_auc')
 
         model = models.Sequential([
-            layers.Input(shape=(timesteps, n_features), name = 'input_layer'),
-            layers.Masking(mask_value=pad_value, name = 'masking_layer'),
-            layers.Bidirectional(layers.GRU(units=32, return_sequences=False, dropout=0.2), name = 'gru_layer'),
-            layers.Dense(units = 16, activation = 'relu', name = 'embedding_layer'),
+            layers.Input(shape=(timesteps, n_features), name='input_layer'),
+            layers.Masking(mask_value=pad_value, name='masking_layer'),
+            layers.Bidirectional(layers.GRU(units=32, return_sequences=False, dropout=0.2), name='gru_layer'),
+            layers.Dense(units=16, activation='relu', name='embedding_layer'),
             layers.Dropout(0.2),
-            layers.Dense(1, activation = 'sigmoid')
+            layers.Dense(1, activation='sigmoid')
         ])
 
         # This is here to insure that the Tensorboard Graph actually visualizes correctly
         model.build(input_shape=(None, timesteps, n_features))
 
-        model.compile(optimizer = tf.keras.optimizers.AdamW(learning_rate = 1e-3, weight_decay = 1e-2),
-                      loss = 'binary_crossentropy',
-                      metrics = ['accuracy', pr_auc, tf.keras.metrics.Precision(name = 'precision'), tf.keras.metrics.Recall(name = 'recall')]
+        model.compile(optimizer=tf.keras.optimizers.AdamW(learning_rate=1e-3, weight_decay=1e-2),
+                      loss='binary_crossentropy',
+                      metrics=['accuracy', pr_auc, tf.keras.metrics.Precision(name='precision'),
+                               tf.keras.metrics.Recall(name='recall')]
                       )
-        
+
         # This is also a a line of code desinged to insure that the Tensorboard Graph appears
         _ = model(tf.zeros((1, timesteps, n_features)))
 
-        es = callbacks.EarlyStopping(monitor = 'val_pr_auc', patience = 2000, mode ='max', restore_best_weights = True)
+        es = callbacks.EarlyStopping(monitor='val_pr_auc', patience=2000, mode='max', restore_best_weights=True)
         ckpt = callbacks.ModelCheckpoint('best_model.keras', monitor='val_pr_auc', mode='max', save_best_only=True)
         rlrop = callbacks.ReduceLROnPlateau(monitor='val_pr_auc', factor=0.5, patience=10, min_lr=1e-7)
 
         print(f'Tensor train_train: {self.X_train_tensor.shape}, y train_train {self.y_train.shape}')
-        print(f'Tensor train_validation: {self.X_validation_tensor.shape}, y train_validation {self.y_validation.shape} popportion of sucessfull trades { round(100 * len(self.y_validation[self.y_validation[self.class_column] == True]) / len(self.y_validation), 2)}%')
+        print(
+            f'Tensor train_validation: {self.X_validation_tensor.shape}, y train_validation {self.y_validation.shape} popportion of sucessfull trades {round(100 * len(self.y_validation[self.y_validation[self.class_column] == True]) / len(self.y_validation), 2)}%')
 
-        #This code is used for making a Tensorboard------------------------------------------------------------------------------------------------------------------------------------------------------------
+        # This code is used for making a Tensorboard------------------------------------------------------------------------------------------------------------------------------------------------------------
         run_id = dt.datetime.now().strftime("%Y%m%d-%H%M%S")
         log_dir = os.path.join("logs", "fit", run_id)
 
-        
         tb_callback = callbacks.TensorBoard(
-                log_dir=log_dir,
-                histogram_freq=1,       # set to 0 to disable weight histograms (faster)
-                write_graph=True,
-                write_images=True,
-                update_freq='epoch',    # or set an integer number of batches
-                profile_batch=(10, 20)  # set to (start, stop) to profile a small window; or None to disable
-            )
+            log_dir=log_dir,
+            histogram_freq=1,  # set to 0 to disable weight histograms (faster)
+            write_graph=True,
+            write_images=True,
+            update_freq='epoch',  # or set an integer number of batches
+            profile_batch=(10, 20)  # set to (start, stop) to profile a small window; or None to disable
+        )
 
-
-        #------------------------------------------------------------------------------------------------------------------------------------------------------------
-
+        # ------------------------------------------------------------------------------------------------------------------------------------------------------------
 
         self.history = model.fit(self.X_train_train_tensor, self.y_train_train[self.class_column],
-                            validation_data = (self.X_train_validation_tensor, self.y_train_validation[self.class_column]),
-                            epochs = 100, 
-                            batch_size = 32,
-                            callbacks = [es, ckpt, rlrop, tb_callback],
-                            verbose = 1)
-        
+                                 validation_data=(
+                                 self.X_train_validation_tensor, self.y_train_validation[self.class_column]),
+                                 epochs=100,
+                                 batch_size=32,
+                                 callbacks=[es, ckpt, rlrop, tb_callback],
+                                 verbose=1)
+
         model.load_weights('best_model.keras')
         self.model_seq = model
 
@@ -245,19 +261,20 @@ class ModelPipeline():
         self.validation_embeddings = self.extract_embeddings(self.X_validation_tensor)
         self.test_embeddings = self.extract_embeddings(self.X_test_tensor)
 
-        self.X_train_with_embedding = pd.concat([self.X_train, self.training_embeddings], axis = 1)
-        self.X_validation_with_embedding = pd.concat([self.X_validation, self.validation_embeddings], axis = 1)
-        self.X_test_with_embedding = pd.concat([self.X_test, self.test_embeddings], axis = 1)
+        self.X_train_with_embedding = pd.concat([self.X_train, self.training_embeddings], axis=1)
+        self.X_validation_with_embedding = pd.concat([self.X_validation, self.validation_embeddings], axis=1)
+        self.X_test_with_embedding = pd.concat([self.X_test, self.test_embeddings], axis=1)
 
-        self.model_embeddings = XGBClassifier(eta = 0.01, n_estimators = 300, max_depth = 12, objective = 'binary:logistic', tree_method = 'hist', eval_metric = 'aucpr')
+        self.model_embeddings = XGBClassifier(eta=0.01, n_estimators=300, max_depth=12, objective='binary:logistic',
+                                              tree_method='hist', eval_metric='aucpr')
         self.model_embeddings.fit(self.X_train_with_embedding, self.y_train[self.class_column])
 
         self.y_val_pred_model_embeddings = self.model_embeddings.predict(self.X_validation_with_embedding)
-        self.y_val_pred_model_embeddings_proba = self.model_embeddings.predict_proba(self.X_validation_with_embedding)[:, 1]
+        self.y_val_pred_model_embeddings_proba = self.model_embeddings.predict_proba(self.X_validation_with_embedding)[
+                                                 :, 1]
 
         self.y_test_pred_model_embeddings = self.model_embeddings.predict(self.X_test_with_embedding)
         self.y_test_pred_model_embeddings_proba = self.model_embeddings.predict_proba(self.X_test_with_embedding)[:, 1]
-
 
         self.val_pred_probs.append(self.y_val_pred_model_embeddings_proba)
         self.test_pred_probs.append(self.y_test_pred_model_embeddings_proba)
@@ -268,7 +285,7 @@ class ModelPipeline():
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
             plt.title(f'Confusion Matrix: XGBoost with Embeddings (Baseline: 41%)')
-            plt.show() 
+            plt.show()
 
             y_validation_ = self.y_validation.copy()
             y_validation_['Prediction'] = self.y_val_pred_model_embeddings
@@ -280,23 +297,28 @@ class ModelPipeline():
             weights_red = plot_data['Prop_1']
             weights_blue = 1 - plot_data['Prop_1']
 
-            plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'], alpha=0.8)
-            plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker) il Modello con Embeddings', fontsize=14)
+            plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red],
+                     color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'], alpha=0.8)
+            plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker) il Modello con Embeddings',
+                      fontsize=14)
             plt.show()
 
             self.plot_performance_over_epochs()
 
     def fit_xgboost(self):
-        self.model_xgboost = XGBClassifier(eta = 0.01, n_estimators = 300, max_depth = 12, objective = 'binary:logistic', tree_method = 'hist', eval_metric = 'aucpr')
-        # Define a custom loss function matrix where misclassifying TP is much more harsh than TN        
-        
+        self.model_xgboost = XGBClassifier(eta=0.01, n_estimators=300, max_depth=12, objective='binary:logistic',
+                                           tree_method='hist', eval_metric='aucpr')
+        # Define a custom loss function matrix where misclassifying TP is much more harsh than TN
+
         self.model_xgboost.fit(self.X_train, self.y_train[self.class_column])
 
-        self.y_val_pred_xgboost = self.model_xgboost.predict(self.X_validation)
         self.y_val_pred_xgboost_proba = self.model_xgboost.predict_proba(self.X_validation)[:, 1]
+        self.y_val_pred_xgboost = (self.y_val_pred_xgboost_proba >= self.classification_threshold).astype(int).flatten()
 
-        self.y_test_pred_xgboost = self.model_xgboost.predict(self.X_test)
+
         self.y_test_pred_xgboost_proba = self.model_xgboost.predict_proba(self.X_test)[:, 1]
+        self.y_test_pred_xgboost = (self.y_test_pred_xgboost_proba >= self.classification_threshold).astype(int).flatten()
+
 
         cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_xgboost)
 
@@ -307,10 +329,9 @@ class ModelPipeline():
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
             plt.title(f'Confusion Matrix: XGBoost(Baseline: 41%)')
-            plt.show() 
+            plt.show()
 
-
-#######################EXPERIMENTAL CODE FOR PRECISION RECALL CURVE ##########################
+            #######################EXPERIMENTAL CODE FOR PRECISION RECALL CURVE ##########################
             precisions, recalls, thresholds = precision_recall_curve(
                 self.y_validation[self.class_column],
                 self.y_val_pred_xgboost_proba
@@ -322,9 +343,9 @@ class ModelPipeline():
             for t in [0.3, 0.4, 0.5, 0.6, 0.7]:
                 idx = np.argmin(np.abs(thresholds - t))
                 plt.annotate(f't={t}', xy=(recalls[idx], precisions[idx]),
-                            fontsize=8, color='red',
-                            arrowprops=dict(arrowstyle='->', color='red'),
-                            xytext=(recalls[idx] + 0.03, precisions[idx] - 0.03))
+                             fontsize=8, color='red',
+                             arrowprops=dict(arrowstyle='->', color='red'),
+                             xytext=(recalls[idx] + 0.03, precisions[idx] - 0.03))
                 plt.scatter(recalls[idx], precisions[idx], color='red', s=40, zorder=5)
 
             plt.xlabel('Recall')
@@ -334,7 +355,7 @@ class ModelPipeline():
             plt.tight_layout()
             plt.show()
 
-##################################################################################################################################
+            ##################################################################################################################################
             '''
             y_validation_ = self.y_validation.copy()
             y_validation_['Prediction'] = self.y_val_pred_xgboost
@@ -351,7 +372,7 @@ class ModelPipeline():
             plt.show()
             '''
 
-    def split_train_tensor(self, split_ratio = 0.8):
+    def split_train_tensor(self, split_ratio=0.8):
         split_idx = int(0.8 * self.X_train_tensor.shape[0])
 
         self.X_train_train_tensor = self.X_train_tensor[:split_idx]
@@ -360,8 +381,8 @@ class ModelPipeline():
         self.y_train_train = self.y_train[:split_idx]
         self.y_train_validation = self.y_train[split_idx:]
 
-        #print(self.X_train_train_tensor)
-        #print(self.y_train_train)
+        # print(self.X_train_train_tensor)
+        # print(self.y_train_train)
 
     def plot_performance_over_epochs(self):
         val_pr_auc_timeseries = self.history.history.get('val_pr_auc', None)
@@ -380,27 +401,29 @@ class ModelPipeline():
         plt.tight_layout()
         plt.show()
 
-    def extract_embeddings(self, tensor_data): # This function takes care of extracting the embeddings from a given tensor according to the Neural Network which we fit
-        extractor = tf.keras.Model(inputs = self.model_seq.inputs,
-                                   outputs = self.model_seq.get_layer('embedding_layer').output)
+    def extract_embeddings(self,
+                           tensor_data):  # This function takes care of extracting the embeddings from a given tensor according to the Neural Network which we fit
+        extractor = tf.keras.Model(inputs=self.model_seq.inputs,
+                                   outputs=self.model_seq.get_layer('embedding_layer').output)
 
         embeddings = extractor.predict(tensor_data)
         emb_df = pd.DataFrame(embeddings,
-                              columns = [f'emb_{i}' for i in range(embeddings.shape[1])])
+                              columns=[f'emb_{i}' for i in range(embeddings.shape[1])])
 
         return emb_df
 
     def fit_ada_boost(self):
 
-        base_estimator = DecisionTreeClassifier(max_depth= 4, criterion='entropy')
-        self.model_ada_boost = AdaBoostClassifier(estimator =base_estimator, n_estimators= 200, learning_rate= 0.01)
+        base_estimator = DecisionTreeClassifier(max_depth=4, criterion='entropy')
+        self.model_ada_boost = AdaBoostClassifier(estimator=base_estimator, n_estimators=200, learning_rate=0.01)
         self.model_ada_boost.fit(self.X_train_masked, self.y_train[self.class_column])
 
-        self.y_val_pred_ada = self.model_ada_boost.predict(self.X_validation_masked)
         self.y_val_pred_ada_proba = self.model_ada_boost.predict_proba(self.X_validation_masked)[:, 1]
+        self.y_val_pred_ada = (self.y_val_pred_ada_proba >= self.classification_threshold).astype(int).flatten()
 
-        self.y_test_pred_ada = self.model_ada_boost.predict(self.X_test_masked)
+
         self.y_test_pred_ada_proba = self.model_ada_boost.predict_proba(self.X_test_masked)
+        self.y_test_pred_ada = (self.y_test_pred_ada_proba >= self.classification_threshold).astype(int).flatten()
 
 
         self.val_pred_probs.append(self.y_val_pred_ada_proba)
@@ -411,7 +434,7 @@ class ModelPipeline():
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
             plt.title(f'Confusion Matrix: AdaBoost (Baseline: 41%)')
-            plt.show() 
+            plt.show()
 
     def fit_h2o_result(self):
         self.h2o_model_2 = h2o.load_model(r"./models/h2o/DeepLearning_grid_2_AutoML_1_20260317_154413_model_6")
@@ -419,10 +442,14 @@ class ModelPipeline():
         self.X_test_h2o = h2o.H2OFrame(self.X_test)
 
         self.validation_h2o_model_2_pred_proba = self.h2o_model_2.predict(self.X_validation_h2o).as_data_frame()
-        self.validation_h2o_model_2_pred = (self.validation_h2o_model_2_pred_proba[[c for c in self.validation_h2o_model_2_pred_proba.columns if c != 'predict'][-1]] >= 0.50).astype(int)
+        self.validation_h2o_model_2_pred = (self.validation_h2o_model_2_pred_proba[
+                                                [c for c in self.validation_h2o_model_2_pred_proba.columns if
+                                                 c != 'predict'][-1]] >= 0.50).astype(int)
 
         self.test_h2o_model_2_pred_proba = self.h2o_model_2.predict(self.X_test_h2o).as_data_frame()
-        self.test_h2o_model_2_pred = (self.test_h2o_model_2_pred_proba[[c for c in self.test_h2o_model_2_pred_proba.columns if c != 'predict'][-1]] >= 0.50).astype(int)
+        self.test_h2o_model_2_pred = (self.test_h2o_model_2_pred_proba[
+                                          [c for c in self.test_h2o_model_2_pred_proba.columns if c != 'predict'][
+                                              -1]] >= 0.50).astype(int)
 
         cm = confusion_matrix(self.y_validation[self.class_column], self.validation_h2o_model_2_pred)
         cm_test = confusion_matrix(self.y_test[self.class_column], self.test_h2o_model_2_pred)
@@ -433,25 +460,25 @@ class ModelPipeline():
         if self.plot_performance:
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
-            plt.title(f'Confusion Matrix: H2O 2nd (Baseline: {self.y_validation[self.class_column].mean()*100:.2f}%)')
+            plt.title(f'Confusion Matrix: H2O 2nd (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%)')
             plt.show()
 
             disp = ConfusionMatrixDisplay(confusion_matrix=cm_test, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
-            plt.title(f'Confusion Matrix: H2O 2nd (Baseline: {self.y_test[self.class_column].mean()*100:.2f}%)')
+            plt.title(f'Confusion Matrix: H2O 2nd (Baseline: {self.y_test[self.class_column].mean() * 100:.2f}%)')
             plt.show()
 
-
-
-    def fit_logistic_regression(self): # Fit the simplest classifier possible, a Logistic Regression
-        self.model_logistic_regression = LogisticRegression(penalty= 'elasticnet', solver = 'saga', l1_ratio=0.5, max_iter = 1000)
+    def fit_logistic_regression(self):  # Fit the simplest classifier possible, a Logistic Regression
+        self.model_logistic_regression = LogisticRegression(penalty='elasticnet', solver='saga', l1_ratio=0.5,
+                                                            max_iter=1000)
         self.model_logistic_regression.fit(self.X_train_masked, self.y_train[self.class_column])
 
-        self.y_val_pred_logistic = self.model_logistic_regression.predict(self.X_validation_masked)
         self.y_val_pred_logistic_proba = self.model_logistic_regression.predict_proba(self.X_validation_masked)[:, 1]
+        self.y_val_pred_logistic = (self.y_val_pred_logistic_proba >= self.classification_threshold).astype(int).flatten()
 
-        self.y_test_pred_logistic = self.model_logistic_regression.predict(self.X_test_masked)
+
         self.y_test_pred_logistic_proba = self.model_logistic_regression.predict_proba(self.X_test_masked)[:, 1]
+        self.y_test_pred_logistic = (self.y_test_pred_logistic_proba >= self.classification_threshold).astype(int).flatten()
 
         cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_logistic)
 
@@ -461,10 +488,11 @@ class ModelPipeline():
         if self.plot_performance:
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
-            plt.title(f'Confusion Matrix: Logistic Regression (Baseline: {self.y_validation[self.class_column].mean()*100:.2f}%)')
+            plt.title(
+                f'Confusion Matrix: Logistic Regression (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%)')
             plt.show()
 
-#######################EXPERIMENTAL CODE FOR PRECISION RECALL CURVE ##########################
+            #######################EXPERIMENTAL CODE FOR PRECISION RECALL CURVE ##########################
             precisions, recalls, thresholds = precision_recall_curve(
                 self.y_validation[self.class_column],
                 self.y_val_pred_logistic
@@ -476,9 +504,9 @@ class ModelPipeline():
             for t in [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
                 idx = np.argmin(np.abs(thresholds - t))
                 plt.annotate(f't={t}', xy=(recalls[idx], precisions[idx]),
-                            fontsize=8, color='red',
-                            arrowprops=dict(arrowstyle='->', color='red'),
-                            xytext=(recalls[idx] + 0.03, precisions[idx] - 0.03))
+                             fontsize=8, color='red',
+                             arrowprops=dict(arrowstyle='->', color='red'),
+                             xytext=(recalls[idx] + 0.03, precisions[idx] - 0.03))
                 plt.scatter(recalls[idx], precisions[idx], color='red', s=40, zorder=5)
 
             plt.xlabel('Recall')
@@ -488,11 +516,9 @@ class ModelPipeline():
             plt.tight_layout()
             plt.show()
 
-##################################################################################################################################
+            ##################################################################################################################################
 
-
-
-#------------------------------------- EXPERIMENTAL CODE TO TRACK AUTOCORRELATION -------------------------------------
+            # ------------------------------------- EXPERIMENTAL CODE TO TRACK AUTOCORRELATION -------------------------------------
             '''
             y_validation_ = self.y_validation.copy()
             y_validation_['Prediction'] = self.y_val_pred_logistic
@@ -508,13 +534,17 @@ class ModelPipeline():
             plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker) la Logistic Regression', fontsize=14)
             plt.show()
             '''
-#---------------------------------------------------------------------------------------------------------------
 
-    def fit_ensemble(self, ensemble_type = 'logistic_regression'):
+    # ---------------------------------------------------------------------------------------------------------------
+
+    def fit_ensemble(self, ensemble_type='logistic_regression'):
 
         if ensemble_type == 'logistic_regression':
-            X_train_ensemble = np.column_stack([self.y_val_pred_model_embeddings_proba, self.y_val_pred_xgboost_proba, self.y_val_pred_nn_seq_proba])
-            X_validation_ensemble = np.column_stack([self.y_test_pred_model_embeddings_proba, self.y_test_pred_xgboost_proba, self.y_test_pred_nn_seq_proba])
+            X_train_ensemble = np.column_stack(
+                [self.y_val_pred_model_embeddings_proba, self.y_val_pred_xgboost_proba, self.y_val_pred_nn_seq_proba])
+            X_validation_ensemble = np.column_stack(
+                [self.y_test_pred_model_embeddings_proba, self.y_test_pred_xgboost_proba,
+                 self.y_test_pred_nn_seq_proba])
 
             self.model_ensemble = LogisticRegression()
             self.model_ensemble.fit(X_train_ensemble, self.y_validation[self.class_column])
@@ -528,7 +558,7 @@ class ModelPipeline():
                 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
                 disp.plot(cmap='Blues')
                 plt.title(f'Confusion Matrix: Ensemble (Baseline: 41%)')
-                plt.show() 
+                plt.show()
 
         if ensemble_type == 'soft_voting':
 
@@ -544,57 +574,55 @@ class ModelPipeline():
             y_validation_ = self.y_validation.copy()
             y_validation_['Prediction'] = y_val_voting_pred
 
-            wins_bid_ask = y_validation_[(y_validation_['Bid Ask PNL'] >= 0) & (y_validation_['Prediction'] == 1)]['Bid Ask PNL']
-            loses_bid_ask = y_validation_[(y_validation_['Bid Ask PNL'] < 0) & (y_validation_['Prediction'] == 1)]['Bid Ask PNL']
+            wins_bid_ask = y_validation_[(y_validation_['Bid Ask PNL'] >= 0) & (y_validation_['Prediction'] == 1)][
+                'Bid Ask PNL']
+            loses_bid_ask = y_validation_[(y_validation_['Bid Ask PNL'] < 0) & (y_validation_['Prediction'] == 1)][
+                'Bid Ask PNL']
 
-            wins_realistic = y_validation_[(y_validation_['Realistic PNL'] >= 0) & (y_validation_['Prediction'] == 1)]['Realistic PNL']
-            loses_realistic = y_validation_[(y_validation_['Realistic PNL'] < 0) & (y_validation_['Prediction'] == 1)]['Realistic PNL']
+            wins_realistic = y_validation_[(y_validation_['Realistic PNL'] >= 0) & (y_validation_['Prediction'] == 1)][
+                'Realistic PNL']
+            loses_realistic = y_validation_[(y_validation_['Realistic PNL'] < 0) & (y_validation_['Prediction'] == 1)][
+                'Realistic PNL']
 
-
-            print(f'Bid-Ask Total wins: {round(wins_bid_ask.sum(), 2)}, Bid-Ask Total loses: {round(loses_bid_ask.sum(), 2)}, average win: {round(wins_bid_ask.mean(), 2)}, average loss: {round(loses_bid_ask.mean(), 2)}, num wins: {len(wins_bid_ask)}, num losses: {len(loses_bid_ask)}')
-            print(f'Realistic Total wins: {round(wins_realistic.sum(), 2)}, Realistic Total loses: {round(loses_realistic.sum(), 2)}, average win: {round(wins_realistic.mean(), 2)}, average loss: {round(loses_realistic.mean(), 2)}, num wins: {len(wins_realistic)}, num losses: {len(loses_realistic)}')
+            print(
+                f'Bid-Ask Total wins: {round(wins_bid_ask.sum(), 2)}, Bid-Ask Total loses: {round(loses_bid_ask.sum(), 2)}, average win: {round(wins_bid_ask.mean(), 2)}, average loss: {round(loses_bid_ask.mean(), 2)}, num wins: {len(wins_bid_ask)}, num losses: {len(loses_bid_ask)}')
+            print(
+                f'Realistic Total wins: {round(wins_realistic.sum(), 2)}, Realistic Total loses: {round(loses_realistic.sum(), 2)}, average win: {round(wins_realistic.mean(), 2)}, average loss: {round(loses_realistic.mean(), 2)}, num wins: {len(wins_realistic)}, num losses: {len(loses_realistic)}')
 
             self.y_val_returns_bid_ask = y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].values
-            self.y_val_returns_realistic = y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].values     
+            self.y_val_returns_realistic = y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].values
 
             if self.no_plotting == False:
                 cm = confusion_matrix(self.y_validation[self.class_column], y_val_voting_pred)
                 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
                 disp.plot(cmap='Blues')
-                plt.title(f'Confusion Matrix: Voting (Baseline: {self.y_validation[self.class_column].mean()*100:.2f}%)')
-                plt.show() 
+                plt.title(
+                    f'Confusion Matrix: Voting (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%)')
+                plt.show()
 
-                plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].reset_index(drop=True).cumsum(), label = 'Bid-Ask PNL Equity Curve')
+                plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].reset_index(drop=True).cumsum(),
+                         label='Bid-Ask PNL Equity Curve')
                 plt.title('Ensemble: Bid Ask PNL equity curve')
                 plt.show()
 
-                plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].reset_index(drop=True).cumsum(), label = 'Realistic PNL Equity Curve')
+                plt.plot(
+                    y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].reset_index(drop=True).cumsum(),
+                    label='Realistic PNL Equity Curve')
                 plt.title('Ensemble: Realistic PNL equity curve')
                 plt.show()
 
-                # Make a plot of the serial correlation of the residuals of the trades and non trades
-                y_validation_['Prediction Probability'] = y_val_voting_proba
-                y_validation_['Residual'] = y_validation_[self.class_column] - y_validation_['Prediction Probability']
-                serial_correlation_dist = y_validation_.groupby('Ticker')['Residual'].apply(self.get_acf)
-                prop_ones = y_validation_.groupby('Ticker')['Prediction'].mean()
-                plot_data = pd.DataFrame({'ACF': serial_correlation_dist, 'Prop_1': prop_ones}).dropna()
-
-                weights_red = plot_data['Prop_1']
-                weights_blue = 1 - plot_data['Prop_1']
-
-                plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'],alpha=0.8)
-                plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker)', fontsize=14)
-                plt.show()
-
-#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                '''
+                
+                # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
                 # Only keep the trades that the ensemble actually predicted as 1
                 plot_df = self.y_validation.copy()
                 plot_df['Prediction'] = y_val_voting_pred
-                #plot_df = plot_df.join(self.X_validation[['Log Market Cap', 'IV Slope']], how='left')
-                plot_df = plot_df[plot_df['Prediction'] == 1].copy()
+                plot_df = plot_df.join(self.X_validation[['Log Market Cap', 'IV Slope']], how='left')
+                #plot_df = plot_df[plot_df['Prediction'] == 1].copy()
+
 
                 if len(plot_df) > 0:
                     mcap_df = plot_df.dropna(subset=['Log Market Cap', 'Realistic PNL']).copy()
@@ -634,32 +662,30 @@ class ModelPipeline():
 
                     plt.tight_layout()
                     plt.show()
-
-#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-
+                '''
+        # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+        # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+        # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+        # ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 
         if ensemble_type == 'grnn':
             from a1_grnn import GRNN
-            
+
             matrix_val_probs = np.array(self.val_pred_probs).T
             matrix_test_probs = np.array(self.test_pred_probs).T
 
-
-            self.grnn = GRNN(sigma = 0.1)
+            self.grnn = GRNN(sigma=0.1)
             self.grnn.fit(matrix_val_probs, self.y_validation[self.class_column])
             y_test_pred = self.grnn.predict(matrix_test_probs).astype(int)
 
             cm = confusion_matrix(self.y_test[self.class_column], y_test_pred)
-            
+
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
             plt.title(f'Confusion Matrix: Voting (Baseline: 41%)')
-            plt.show() 
+            plt.show()
 
-    def run_permutation_test(self, model, X, y, n_iterations = 200):
+    def run_permutation_test(self, model, X, y, n_iterations=200):
         from sklearn.base import clone
         from sklearn.metrics import precision_score, average_precision_score
 
@@ -687,134 +713,137 @@ class ModelPipeline():
 
             shuff_probs = temp_model.predict_proba(X)[:, 1]
             shuff_preds = (shuff_probs >= self.classification_threshold).astype(int)
-            
+
             # Store scores
             null_precision.append(precision_score(y_shuffled, shuff_preds))
             null_prauc.append(average_precision_score(y_shuffled, shuff_probs))
 
-
         p_value_precision = np.sum(np.array(null_precision) >= true_precision) / n_iterations
-        p_value_prauc = np.sum(np.array(null_prauc) >= true_prauc) / n_iterations   
+        p_value_prauc = np.sum(np.array(null_prauc) >= true_prauc) / n_iterations
 
         fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 5))
-    
+
         # Precision Plot
         ax1.hist(null_precision, bins=20, color='skyblue', edgecolor='black', alpha=0.7)
         ax1.axvline(true_precision, color='red', linestyle='--', linewidth=2, label=f'True Score: {true_precision:.3f}')
         ax1.set_title(f'Precision Distribution (p={p_value_precision:.4f})')
         ax1.set_xlabel('Precision')
         ax1.legend()
-        
+
         # PR-AUC Plot
         ax2.hist(null_prauc, bins=20, color='salmon', edgecolor='black', alpha=0.7)
         ax2.axvline(true_prauc, color='red', linestyle='--', linewidth=2, label=f'True Score: {true_prauc:.3f}')
         ax2.set_title(f'PR-AUC Distribution (p={p_value_prauc:.4f})')
         ax2.set_xlabel('PR-AUC')
         ax2.legend()
-        
+
         plt.tight_layout()
         plt.show()
 
-
-    def get_polynomial_expanded_features(self, X, degree_ = 3):
+    def get_polynomial_expanded_features(self, X, degree_=3):
         X = X.fillna(1e-8)
 
         poly = PolynomialFeatures(degree=degree_, include_bias=False)
         poly_features = poly.fit_transform(X)
 
-        return pd.DataFrame(poly_features, index=X.index,columns=poly.get_feature_names_out(X.columns))
+        return pd.DataFrame(poly_features, index=X.index, columns=poly.get_feature_names_out(X.columns))
 
-    def get_polynomial_expanded_tensor(self, X_tensor, degree_ = 3):
+    def get_polynomial_expanded_tensor(self, X_tensor, degree_=3):
 
-            T, N, F = X_tensor.shape
-            feature_names = [f"x{j}" for j in range(F)]
+        T, N, F = X_tensor.shape
+        feature_names = [f"x{j}" for j in range(F)]
 
-            exps_list = []
-            names = []
-            for d in range(1, degree_ + 1):
-                for combo in combinations_with_replacement(range(F), d):
-                    e = np.zeros(F, dtype=int)
-                    for idx in combo:
-                        e[idx] += 1
-                    exps_list.append(e)
+        exps_list = []
+        names = []
+        for d in range(1, degree_ + 1):
+            for combo in combinations_with_replacement(range(F), d):
+                e = np.zeros(F, dtype=int)
+                for idx in combo:
+                    e[idx] += 1
+                exps_list.append(e)
 
-                    # Build a readable name: e.g., X^2 Y
-                    parts = []
-                    for j, p in enumerate(e):
-                        if p == 1:
-                            parts.append(f"{feature_names[j]}")
-                        elif p > 1:
-                            parts.append(f"{feature_names[j]}^{p}")
-                    names.append(" ".join(parts))
+                # Build a readable name: e.g., X^2 Y
+                parts = []
+                for j, p in enumerate(e):
+                    if p == 1:
+                        parts.append(f"{feature_names[j]}")
+                    elif p > 1:
+                        parts.append(f"{feature_names[j]}^{p}")
+                names.append(" ".join(parts))
 
-            E = np.vstack(exps_list)  # (M, F)
-            M = E.shape[0]
+        E = np.vstack(exps_list)  # (M, F)
+        M = E.shape[0]
 
-            X2 = X_tensor.reshape(-1, F)  # (TN, F)
-            TN = X2.shape[0]
+        X2 = X_tensor.reshape(-1, F)  # (TN, F)
+        TN = X2.shape[0]
 
-            out = np.ones((TN, M), dtype=X_tensor.dtype)
+        out = np.ones((TN, M), dtype=X_tensor.dtype)
 
-            for j in range(F):
-                exp_j = E[:, j]  # (M,)
-                if np.any(exp_j):  # skip if all zeros for performance
-                    out *= np.power(X2[:, j][:, None], exp_j[None, :])
+        for j in range(F):
+            exp_j = E[:, j]  # (M,)
+            if np.any(exp_j):  # skip if all zeros for performance
+                out *= np.power(X2[:, j][:, None], exp_j[None, :])
 
-                # Reshape back to (T, N, M)
+            # Reshape back to (T, N, M)
 
-            X_expanded = out.reshape(T, N, M)
+        X_expanded = out.reshape(T, N, M)
 
-            return X_expanded
+        return X_expanded
 
-    def generate_synthetic_data(self, Xy, generator = 'GAN'):
+    def generate_synthetic_data(self, Xy, generator='GAN'):
         from sdv.metadata import Metadata
 
         if generator == 'GAN':
             from sdv.single_table import CTGANSynthesizer
-        
+
             # First get the info about the columns such as names, dtypes, rounding etc...
-            Xy_metadata = Metadata.detect_from_dataframe(data = self.Xy_train, table_name = 'Xy_train')
+            Xy_metadata = Metadata.detect_from_dataframe(data=self.Xy_train, table_name='Xy_train')
 
             # Define the GAN Synthesizer
-            self.synthesizer = CTGANSynthesizer(metadata = Xy_metadata, epochs = 300, batch_size = 100, verbose = True) # Keep in mind default batch size is 500 accordingg to the documentation
-            self.synthesizer.fit(Xy) # Fit the GAN to the actual data 
+            self.synthesizer = CTGANSynthesizer(metadata=Xy_metadata, epochs=300, batch_size=100,
+                                                verbose=True)  # Keep in mind default batch size is 500 accordingg to the documentation
+            self.synthesizer.fit(Xy)  # Fit the GAN to the actual data
 
-            synthetic_df = self.synthesizer.sample(num_rows = int(self.synthetic_data_multiplyer * len(Xy))) # Get the synthetic data
+            synthetic_df = self.synthesizer.sample(
+                num_rows=int(self.synthetic_data_multiplyer * len(Xy)))  # Get the synthetic data
 
             # Those here are some diagnostic checks to insure that everything is working as expected with the GAN
             if self.visualize_synthetic_data:
                 from sdv.evaluation.single_table import run_diagnostic, evaluate_quality, get_column_plot
 
-                diagnostic_report = run_diagnostic(real_data=Xy, synthetic_data=synthetic_df, metadata = Xy_metadata) # This checks that the columns are generated according to the correct datatype etc... should be 100%
-                quality_report = evaluate_quality(real_data=Xy, synthetic_data=synthetic_df, metadata = Xy_metadata) # This checks how well the synthetic data resembles the real data on a similarity score between 0% and 100%, here the check is for patterns etc... 80% is good enough
+                diagnostic_report = run_diagnostic(real_data=Xy, synthetic_data=synthetic_df,
+                                                   metadata=Xy_metadata)  # This checks that the columns are generated according to the correct datatype etc... should be 100%
+                quality_report = evaluate_quality(real_data=Xy, synthetic_data=synthetic_df,
+                                                  metadata=Xy_metadata)  # This checks how well the synthetic data resembles the real data on a similarity score between 0% and 100%, here the check is for patterns etc... 80% is good enough
 
                 for col in self.Xy_train.columns.tolist():
-                    fig = get_column_plot(real_data=Xy, synthetic_data=synthetic_df, metadata = Xy_metadata, column_name=col)
+                    fig = get_column_plot(real_data=Xy, synthetic_data=synthetic_df, metadata=Xy_metadata,
+                                          column_name=col)
                     fig.show()
 
-            Xy = pd.concat([Xy, synthetic_df], axis = 0)
-
+            Xy = pd.concat([Xy, synthetic_df], axis=0)
 
             return Xy[[col for col in self.X_train.columns]], Xy[[self.class_column]]
-
 
         if generator == 'Sequential':
             from sdv.sequential import PARSynthesizer
             # First get the info about the columns such as names, dtypes, rounding etc...
-            Xy_metadata = Metadata.detect_from_dataframe(data = self.Xy_train, table_name = 'Xy_train')            
+            Xy_metadata = Metadata.detect_from_dataframe(data=self.Xy_train, table_name='Xy_train')
             Xy_metadata.update_column(column_name='Ticker', sdtype='id')
-            Xy_metadata.set_sequence_key('Ticker') # Set the Sequence key i.e. which company it is
-            Xy_metadata.set_sequence_index('Seq Count') # Set the sequence index i.e. which earnings is it in sequence
+            Xy_metadata.set_sequence_key('Ticker')  # Set the Sequence key i.e. which company it is
+            Xy_metadata.set_sequence_index('Seq Count')  # Set the sequence index i.e. which earnings is it in sequence
 
-            self.synthesizer = PARSynthesizer(metadata = Xy_metadata, epochs = 128, enforce_min_max_values = True, enforce_rounding = True, verbose = True) # This is the sequential model synthesizer PARSynthesizer
+            self.synthesizer = PARSynthesizer(metadata=Xy_metadata, epochs=128, enforce_min_max_values=True,
+                                              enforce_rounding=True,
+                                              verbose=True)  # This is the sequential model synthesizer PARSynthesizer
             self.synthesizer.fit(Xy)
 
-            synthetic_df = self.synthesizer.sample(num_sequences = int(self.synthetic_data_multiplyer * self.X_train_['Ticker'].nunique()) )
+            synthetic_df = self.synthesizer.sample(
+                num_sequences=int(self.synthetic_data_multiplyer * self.X_train_['Ticker'].nunique()))
 
-            Xy = pd.concat([Xy, synthetic_df], axis = 0)
+            Xy = pd.concat([Xy, synthetic_df], axis=0)
 
-            return Xy[[col for col in self.X_train.columns]], Xy[[self.class_column]]            
-
+            return Xy[[col for col in self.X_train.columns]], Xy[[self.class_column]]
 
     def run_correlation_matrix(self, X):
         import seaborn as sns
@@ -833,36 +862,48 @@ class ModelPipeline():
     def return_predictions_validation(self):
         return {
             'y_val_pred_logistic': self.y_val_pred_logistic if hasattr(self, 'y_val_pred_logistic') else None,
-            'y_val_pred_logistic_proba': self.y_val_pred_logistic_proba if hasattr(self, 'y_val_pred_logistic_proba') else None,
+            'y_val_pred_logistic_proba': self.y_val_pred_logistic_proba if hasattr(self,
+                                                                                   'y_val_pred_logistic_proba') else None,
             'y_val_pred_xgboost': self.y_val_pred_xgboost if hasattr(self, 'y_val_pred_xgboost') else None,
-            'y_val_pred_xgboost_proba': self.y_val_pred_xgboost_proba if hasattr(self, 'y_val_pred_xgboost_proba') else None,
+            'y_val_pred_xgboost_proba': self.y_val_pred_xgboost_proba if hasattr(self,
+                                                                                 'y_val_pred_xgboost_proba') else None,
             'y_val_pred_nn_seq': self.y_val_pred_nn_seq if hasattr(self, 'y_val_pred_nn_seq') else None,
-            'y_val_pred_nn_seq_proba': self.y_val_pred_nn_seq_proba if hasattr(self, 'y_val_pred_nn_seq_proba') else None,
-            'y_val_pred_model_embeddings': self.y_val_pred_model_embeddings if hasattr(self, 'y_val_pred_model_embeddings') else None,
-            'y_val_pred_model_embeddings_proba': self.y_val_pred_model_embeddings_proba if hasattr(self, 'y_val_pred_model_embeddings_proba') else None,
+            'y_val_pred_nn_seq_proba': self.y_val_pred_nn_seq_proba if hasattr(self,
+                                                                               'y_val_pred_nn_seq_proba') else None,
+            'y_val_pred_model_embeddings': self.y_val_pred_model_embeddings if hasattr(self,
+                                                                                       'y_val_pred_model_embeddings') else None,
+            'y_val_pred_model_embeddings_proba': self.y_val_pred_model_embeddings_proba if hasattr(self,
+                                                                                                   'y_val_pred_model_embeddings_proba') else None,
             'y_val_pred_ada': self.y_val_pred_ada if hasattr(self, 'y_val_pred_ada') else None,
             'y_val_pred_ada_proba': self.y_val_pred_ada_proba if hasattr(self, 'y_val_pred_ada_proba') else None,
             'y_val_prediction': self.y_val_prediction if hasattr(self, 'y_val_prediction') else None,
             'y_val_prediction_proba': self.y_val_prediction_proba if hasattr(self, 'y_val_prediction_proba') else None,
             'y_val_returns_bid_ask': self.y_val_returns_bid_ask if hasattr(self, 'y_val_returns_bid_ask') else None,
-            'y_val_returns_realistic': self.y_val_returns_realistic if hasattr(self, 'y_val_returns_realistic') else None
+            'y_val_returns_realistic': self.y_val_returns_realistic if hasattr(self,
+                                                                               'y_val_returns_realistic') else None
 
         }
-    
+
     def return_predictions_test(self):
         return {
             'y_test_pred_logistic': self.y_test_pred_logistic if hasattr(self, 'y_test_pred_logistic') else None,
-            'y_test_pred_logistic_proba': self.y_test_pred_logistic_proba if hasattr(self, 'y_test_pred_logistic_proba') else None,
+            'y_test_pred_logistic_proba': self.y_test_pred_logistic_proba if hasattr(self,
+                                                                                     'y_test_pred_logistic_proba') else None,
             'y_test_pred_xgboost': self.y_test_pred_xgboost if hasattr(self, 'y_test_pred_xgboost') else None,
-            'y_test_pred_xgboost_proba': self.y_test_pred_xgboost_proba if hasattr(self, 'y_test_pred_xgboost_proba') else None,
+            'y_test_pred_xgboost_proba': self.y_test_pred_xgboost_proba if hasattr(self,
+                                                                                   'y_test_pred_xgboost_proba') else None,
             'y_test_pred_nn_seq': self.y_test_pred_nn_seq if hasattr(self, 'y_test_pred_nn_seq') else None,
-            'y_test_pred_nn_seq_proba': self.y_test_pred_nn_seq_proba if hasattr(self, 'y_test_pred_nn_seq_proba') else None,
-            'y_test_pred_model_embeddings': self.y_test_pred_model_embeddings if hasattr(self, 'y_test_pred_model_embeddings') else None,
-            'y_test_pred_model_embeddings_proba': self.y_test_pred_model_embeddings_proba if hasattr(self, 'y_test_pred_model_embeddings_proba') else None,
+            'y_test_pred_nn_seq_proba': self.y_test_pred_nn_seq_proba if hasattr(self,
+                                                                                 'y_test_pred_nn_seq_proba') else None,
+            'y_test_pred_model_embeddings': self.y_test_pred_model_embeddings if hasattr(self,
+                                                                                         'y_test_pred_model_embeddings') else None,
+            'y_test_pred_model_embeddings_proba': self.y_test_pred_model_embeddings_proba if hasattr(self,
+                                                                                                     'y_test_pred_model_embeddings_proba') else None,
             'y_test_pred_ada': self.y_test_pred_ada if hasattr(self, 'y_test_pred_ada') else None,
             'y_test_pred_ada_proba': self.y_test_pred_ada_proba if hasattr(self, 'y_test_pred_ada_proba') else None,
             'y_test_prediction': self.y_test_prediction if hasattr(self, 'y_test_prediction') else None,
-            'y_test_prediction_proba': self.y_test_prediction_proba if hasattr(self, 'y_test_prediction_proba') else None
+            'y_test_prediction_proba': self.y_test_prediction_proba if hasattr(self,
+                                                                               'y_test_prediction_proba') else None
         }
 
     def shap_feature_importance(self, model, X):
@@ -875,16 +916,16 @@ class ModelPipeline():
         shap_values_prob = copy.deepcopy(shap_values)
         v = shap_values.values
         b = shap_values.base_values
+
         def sigmoid(x): return 1 / (1 + np.exp(-x))
+
         shap_values_prob.values = sigmoid(b[:, np.newaxis] + v) - sigmoid(b[:, np.newaxis])
         shap_values_prob.base_values = sigmoid(b)
 
         shap.plots.beeswarm(shap_values_prob)
         shap.summary_plot(shap_values, X, plot_type="bar")
 
-
-
-    def select_h2o_threshold_for_precision(self, y_true, y_proba, min_recall = 0.05):
+    def select_h2o_threshold_for_precision(self, y_true, y_proba, min_recall=0.05):
         y_true = np.asarray(y_true).astype(int)
         y_proba = np.asarray(y_proba, dtype=float)
 
@@ -935,7 +976,6 @@ class ModelPipeline():
             'meets_recall_constraint': meets_recall_constraint,
         }
 
-
     def fit_automl_h2o(self):
         from h2o.automl import H2OAutoML
 
@@ -948,18 +988,18 @@ class ModelPipeline():
 
         # Convert to H2O frames
         train_h2o = h2o.H2OFrame(train_df)
-        val_h2o   = h2o.H2OFrame(val_df)
+        val_h2o = h2o.H2OFrame(val_df)
 
         # H2O needs the target as a categorical for classification
         train_h2o[self.class_column] = train_h2o[self.class_column].asfactor()
-        val_h2o[self.class_column]   = val_h2o[self.class_column].asfactor()
+        val_h2o[self.class_column] = val_h2o[self.class_column].asfactor()
 
         aml = H2OAutoML(
-            max_models=50,              # train as many as possible
+            max_models=50,  # train as many as possible
             max_runtime_secs=3600,
             seed=42,
-            nfolds=0,                   # disable CV so our validation frame is respected
-            stopping_metric='AUCPR',    # closest native proxy for precision
+            nfolds=0,  # disable CV so our validation frame is respected
+            stopping_metric='AUCPR',  # closest native proxy for precision
             sort_metric='AUCPR',
             keep_cross_validation_predictions=False,
         )
@@ -1023,7 +1063,6 @@ class ModelPipeline():
 
         print(f"\n--- Leaderboard sorted by validation precision with recall >= {self.h2o_min_recall:.0%} ---")
         print(self.automl_h2o_precision_leaderboard)
-        
 
         # Best model by precision under the validation recall constraint
         best_row = self.automl_h2o_precision_leaderboard.iloc[0]
@@ -1033,12 +1072,13 @@ class ModelPipeline():
         best_preds = self.automl_h2o_best_model.predict(val_h2o).as_data_frame(use_multi_thread=True)
         best_prob_col = 'p1' if 'p1' in best_preds.columns else [c for c in best_preds.columns if c != 'predict'][-1]
         self.automl_h2o_best_model_val_proba = best_preds[best_prob_col].astype(float).values
-        self.automl_h2o_best_model_val_pred = (self.automl_h2o_best_model_val_proba >= self.automl_h2o_best_threshold).astype(int)
+        self.automl_h2o_best_model_val_pred = (
+                    self.automl_h2o_best_model_val_proba >= self.automl_h2o_best_threshold).astype(int)
         self.automl_h20_best_model_val_pred = self.automl_h2o_best_model_val_pred
 
         cm = confusion_matrix(
-        y_true,
-        self.automl_h2o_best_model_val_pred
+            y_true,
+            self.automl_h2o_best_model_val_pred
         )
 
         # Save the top N models together with the threshold selected on the validation set
@@ -1046,7 +1086,8 @@ class ModelPipeline():
         self.saved_h2o_model_paths = {}
         self.saved_h2o_model_thresholds = {}
 
-        for i, row in enumerate(self.automl_h2o_precision_leaderboard.head(self.h2o_top_n_models).itertuples(index=False), start=1):
+        for i, row in enumerate(
+                self.automl_h2o_precision_leaderboard.head(self.h2o_top_n_models).itertuples(index=False), start=1):
             model_id = row.model_id
             model = h2o.get_model(model_id)
             path = h2o.save_model(model=model, path='./models/h2o', force=True)
@@ -1057,8 +1098,8 @@ class ModelPipeline():
                 f"threshold={float(row.threshold):.6f}, precision={float(row.precision):.4f}, recall={float(row.recall):.4f}"
             )
 
-
-        self.automl_h2o_precision_leaderboard['saved_path'] = self.automl_h2o_precision_leaderboard['model_id'].map(self.saved_h2o_model_paths)
+        self.automl_h2o_precision_leaderboard['saved_path'] = self.automl_h2o_precision_leaderboard['model_id'].map(
+            self.saved_h2o_model_paths)
         self.automl_h2o_precision_leaderboard.to_excel('h20_models.xlsx', index=False)
         disp = ConfusionMatrixDisplay(
             confusion_matrix=cm,
@@ -1072,12 +1113,7 @@ class ModelPipeline():
         plt.tight_layout()
         plt.show()
 
-        
-
-
         h2o.shutdown(prompt=False)
-
-
 
         '''
         # Final predictions on test set
@@ -1087,8 +1123,9 @@ class ModelPipeline():
         self.y_test_pred_automl_h2o_proba = test_preds['p1'].values
         '''
 
-    
 
 if __name__ == '__main__':
-    ModelPipeline(plot_correlation_matrix= False, plot_performance= True, class_column = 'Profitable Trade',classification_threshold= 0.5, polynomial_expansion_degree= 1, synthetic_data_multiplyer= 0, 
-                  visualize_synthetic_data= False, run_hybrid= False, synthetic_generator= 'Sequential', no_plotting = False, feature_importance= False)
+    ModelPipeline(plot_correlation_matrix=False, plot_performance=True, class_column='Profitable Trade',
+                  classification_threshold=0.6, polynomial_expansion_degree=1, synthetic_data_multiplyer=0,
+                  visualize_synthetic_data=False, run_hybrid=False, synthetic_generator='Sequential', no_plotting=False,
+                  feature_importance=False, run_ada= True)
