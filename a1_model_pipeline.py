@@ -69,7 +69,7 @@ class ModelPipeline():
         self.test_pred_probs = []
 
 
-        option_scaler = ScaleOptionData(return_raw= False, train_start_date = self.train_start_date, train_end_date = self.train_end_date, validation_end_date = self.validation_end_date, test_end_date=self.test_end_date) # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
+        option_scaler = ScaleOptionData(return_raw= True, train_start_date = self.train_start_date, train_end_date = self.train_end_date, validation_end_date = self.validation_end_date, test_end_date=self.test_end_date) # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
         self.X_train_, self.X_validation_, self.X_test_ = option_scaler.return_X() # Get the X feature matrix for the train, validation and test
 
         # For some reason I had to reset the index
@@ -77,6 +77,9 @@ class ModelPipeline():
         self.X_validation_.reset_index(inplace= True, drop = True)
         self.X_test_.reset_index(inplace= True, drop = True)
         self.y_train, self.y_validation, self.y_test = option_scaler.return_y() # Get the y for training, validation and test
+        self.y_train.reset_index(inplace=True, drop=True)
+        self.y_validation.reset_index(inplace=True, drop=True)
+        self.y_test.reset_index(inplace=True, drop=True)
 
         # Drop columns which we will not use for fitting the model
         self.X_train = self.X_train_[[col for col in self.X_train_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
@@ -587,98 +590,47 @@ class ModelPipeline():
 #----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
 #----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
-                                # Only keep the trades that the ensemble actually predicted as 1
-                plot_df = y_validation_[y_validation_['Prediction'] == 1].copy()
-
-                # Bring in the corresponding validation features for those same rows
-                plot_df['Log Market Cap'] = self.X_validation.loc[plot_df.index, 'Log Market Cap']
-                plot_df['IV Slope'] = self.X_validation.loc[plot_df.index, 'IV Slope']
-
-                # Drop missing values just in case
-                plot_df = plot_df.dropna(subset=['Log Market Cap', 'IV Slope', 'Realistic PNL', 'Bid Ask PNL'])
+                # Only keep the trades that the ensemble actually predicted as 1
+                plot_df = self.y_validation.copy()
+                plot_df['Prediction'] = y_val_voting_pred
+                #plot_df = plot_df.join(self.X_validation[['Log Market Cap', 'IV Slope']], how='left')
+                plot_df = plot_df[plot_df['Prediction'] == 1].copy()
 
                 if len(plot_df) > 0:
-
-                    # -----------------------------
-                    # 1. Profitability vs Log Market Cap
-                    # -----------------------------
-                    plot_df['Log Market Cap Bin'] = pd.qcut(plot_df['Log Market Cap'], q=5, duplicates='drop')
+                    mcap_df = plot_df.dropna(subset=['Log Market Cap', 'Realistic PNL']).copy()
+                    iv_df = plot_df.dropna(subset=['IV Slope', 'Realistic PNL']).copy()
 
                     fig, axes = plt.subplots(1, 2, figsize=(16, 6))
 
-                    sns.boxplot(data=plot_df, x='Log Market Cap Bin', y='Realistic PNL', ax=axes[0])
-                    axes[0].set_title('Predicted Trades Only: Realistic PNL by Log Market Cap')
-                    axes[0].tick_params(axis='x', rotation=45)
+                    if len(mcap_df) > 0:
+                        sns.regplot(
+                            data=mcap_df,
+                            x='Log Market Cap',
+                            y='Realistic PNL',
+                            scatter_kws={'alpha': 0.25, 's': 20},
+                            line_kws={'color': 'red'},
+                            ax=axes[0]
+                        )
+                        axes[0].set_title('Realistic PNL vs Log Market Cap')
+                        axes[0].set_xlabel('Log Market Cap')
+                        axes[0].set_ylabel('Realistic PNL')
+                    else:
+                        axes[0].set_visible(False)
 
-                    sns.boxplot(data=plot_df, x='Log Market Cap Bin', y='Bid Ask PNL', ax=axes[1])
-                    axes[1].set_title('Predicted Trades Only: Bid Ask PNL by Log Market Cap')
-                    axes[1].tick_params(axis='x', rotation=45)
-
-                    plt.tight_layout()
-                    plt.show()
-
-                    # Optional mean-profitability view by Log Market Cap bin
-                    mcap_summary = plot_df.groupby('Log Market Cap Bin', observed=False).agg(
-                        mean_realistic_pnl=('Realistic PNL', 'mean'),
-                        mean_bid_ask_pnl=('Bid Ask PNL', 'mean'),
-                        trade_count=('Prediction', 'size')
-                    ).reset_index()
-
-                    fig, axes = plt.subplots(1, 2, figsize=(16, 5))
-
-                    sns.barplot(data=mcap_summary, x='Log Market Cap Bin', y='mean_realistic_pnl', ax=axes[0])
-                    axes[0].set_title('Mean Realistic PNL by Log Market Cap')
-                    axes[0].tick_params(axis='x', rotation=45)
-
-                    sns.barplot(data=mcap_summary, x='Log Market Cap Bin', y='mean_bid_ask_pnl', ax=axes[1])
-                    axes[1].set_title('Mean Bid Ask PNL by Log Market Cap')
-                    axes[1].tick_params(axis='x', rotation=45)
-
-                    plt.tight_layout()
-                    plt.show()
-
-                    # -----------------------------
-                    # 2. Profitability vs IV Slope
-                    # -----------------------------
-                    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-                    sns.regplot(
-                        data=plot_df,
-                        x='IV Slope',
-                        y='Realistic PNL',
-                        lowess=True,
-                        scatter_kws={'alpha': 0.4, 's': 25},
-                        line_kws={'color': 'red'},
-                        ax=axes[0]
-                    )
-                    axes[0].set_title('Predicted Trades Only: Realistic PNL vs IV Slope')
-
-                    sns.regplot(
-                        data=plot_df,
-                        x='IV Slope',
-                        y='Bid Ask PNL',
-                        lowess=True,
-                        scatter_kws={'alpha': 0.4, 's': 25},
-                        line_kws={'color': 'red'},
-                        ax=axes[1]
-                    )
-                    axes[1].set_title('Predicted Trades Only: Bid Ask PNL vs IV Slope')
-
-                    plt.tight_layout()
-                    plt.show()
-
-                    # Optional binned view for IV Slope
-                    plot_df['IV Slope Bin'] = pd.qcut(plot_df['IV Slope'], q=5, duplicates='drop')
-
-                    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
-
-                    sns.boxplot(data=plot_df, x='IV Slope Bin', y='Realistic PNL', ax=axes[0])
-                    axes[0].set_title('Predicted Trades Only: Realistic PNL by IV Slope Bin')
-                    axes[0].tick_params(axis='x', rotation=45)
-
-                    sns.boxplot(data=plot_df, x='IV Slope Bin', y='Bid Ask PNL', ax=axes[1])
-                    axes[1].set_title('Predicted Trades Only: Bid Ask PNL by IV Slope Bin')
-                    axes[1].tick_params(axis='x', rotation=45)
+                    if len(iv_df) > 0:
+                        sns.regplot(
+                            data=iv_df,
+                            x='IV Slope',
+                            y='Realistic PNL',
+                            scatter_kws={'alpha': 0.25, 's': 20},
+                            line_kws={'color': 'red'},
+                            ax=axes[1]
+                        )
+                        axes[1].set_title('Realistic PNL vs IV Slope')
+                        axes[1].set_xlabel('IV Slope')
+                        axes[1].set_ylabel('Realistic PNL')
+                    else:
+                        axes[1].set_visible(False)
 
                     plt.tight_layout()
                     plt.show()
