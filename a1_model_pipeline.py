@@ -7,20 +7,22 @@ from tensorflow.keras import layers, models, callbacks
 import sys
 import matplotlib.pyplot as plt
 from xgboost import XGBClassifier
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, precision_recall_curve, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
 from itertools import combinations_with_replacement
 from sklearn.preprocessing import PolynomialFeatures
-
+import h2o
 import datetime as dt
 import os
+import seaborn as sns
 
 
 class ModelPipeline():
     def __init__(self, class_column = 'Profitable Trade', plot_performance = True, classification_threshold = 0.5, polynomial_expansion_degree = 1, permutation_test = False, 
                  run_logistic = True, run_xgboost = True, run_hybrid = True, run_ada = True, synthetic_data_multiplyer = 0, visualize_synthetic_data = False, synthetic_generator = 'GAN',
-                 plot_correlation_matrix = False, train_start_date = '2016-01-01', train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date = '2024-12-31'):
+                 plot_correlation_matrix = False, train_start_date = '2016-01-01', train_end_date = '2020-12-31', validation_end_date = '2022-12-31', test_end_date = '2024-12-31',
+                 no_plotting = False, feature_importance = False, run_automl = False, h2o_top_n_models = 3, h2o_min_recall = 0.05):
 
         # Foundational parameters for the Option scaler
         self.train_start_date = train_start_date
@@ -30,6 +32,8 @@ class ModelPipeline():
 
         # Whether to plot the correlation mattrix of the training features
         self.plot_correlation_matrix = plot_correlation_matrix
+        self.no_plotting = no_plotting # This disables all plotting
+        self.feature_importance = feature_importance # Whether to run the SHAP feature importance at the end of the pipeline, only works for tree based models and not for the Hybrid Model for now
 
         # This will take care of creating synthetic data
         if synthetic_data_multiplyer > 0:
@@ -54,6 +58,9 @@ class ModelPipeline():
         self.run_hybrid = run_hybrid # Whether to fit the Hybrid Model -> Get a seq_nn and  XGBoost with embeddings
         self.run_ada = run_ada # Whether to fit an ADA Boosted Decision Tree Model
         self.class_column = class_column # Define the class we want to classify
+        self.run_automl = run_automl
+        self.h2o_top_n_models = h2o_top_n_models
+        self.h2o_min_recall = h2o_min_recall
 
         self.permutation_test = permutation_test # Decide whether to run a permutation test
         self.plot_performance = plot_performance # Whether we will plot Confusion matrixes per model , NN performance over epochs etc...
@@ -61,7 +68,8 @@ class ModelPipeline():
         self.val_pred_probs = []
         self.test_pred_probs = []
 
-        option_scaler = ScaleOptionData(train_start_date = self.train_start_date, train_end_date = self.train_end_date, validation_end_date = self.validation_end_date, test_end_date=self.test_end_date) # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
+
+        option_scaler = ScaleOptionData(return_raw= False, train_start_date = self.train_start_date, train_end_date = self.train_end_date, validation_end_date = self.validation_end_date, test_end_date=self.test_end_date) # My own build class that converts the Option Data from feature matrexes into ready to be fead data for the models
         self.X_train_, self.X_validation_, self.X_test_ = option_scaler.return_X() # Get the X feature matrix for the train, validation and test
 
         # For some reason I had to reset the index
@@ -70,7 +78,6 @@ class ModelPipeline():
         self.X_test_.reset_index(inplace= True, drop = True)
         self.y_train, self.y_validation, self.y_test = option_scaler.return_y() # Get the y for training, validation and test
 
-
         # Drop columns which we will not use for fitting the model
         self.X_train = self.X_train_[[col for col in self.X_train_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
         self.X_validation = self.X_validation_[[col for col in self.X_validation_.columns if col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]   
@@ -78,12 +85,9 @@ class ModelPipeline():
    
 
 #-----------------------------------THIS OVERWRITES THE CLASS TO USE REALISTIC PNL TO SEE HOW THE MODEL IMPROVES------------------------------------------------------------------------------------
-        self.y_train[self.class_column] = self.y_train['Realistic PNL'] >= 0.25
-        self.y_validation[self.class_column] = self.y_validation['Realistic PNL'] >= 0.25
-        self.y_test[self.class_column] = self.y_test['Realistic PNL'] >= 0.25
-
-
-
+        self.y_train[self.class_column] = self.y_train['Realistic PNL'] >= 0.15
+        self.y_validation[self.class_column] = self.y_validation['Realistic PNL'] >= 0.15
+        self.y_test[self.class_column] = self.y_test['Realistic PNL'] >= 0.15
 #-----------------------------------------------------------------------------------------------------------------------
 
 
@@ -118,7 +122,6 @@ class ModelPipeline():
         print(f'y_validation: {self.y_validation.shape}, X_train: {self.X_validation.shape}, X_validation_tensor: {self.X_validation_tensor.shape}')
 
 
-
         # Implement a polynomial expansion if I decide to
         if self.use_poly_expansion:
             self.X_train_tensor = self.get_polynomial_expanded_tensor(self.X_train_tensor, self.polynomial_expansion_degree)
@@ -135,11 +138,23 @@ class ModelPipeline():
             self.X_validation_masked = self.get_polynomial_expanded_features(self.X_validation_masked, self.polynomial_expansion_degree)
             self.X_test_masked = self.get_polynomial_expanded_features(self.X_test_masked, self.polynomial_expansion_degree)
 
+        ''' 
+        if self.run_automl:
+            h2o.init()
+            self.fit_automl_h2o()
+            self.fit_h2o_result()
+        else:
+            h2o.init()
+            self.fit_h2o_result()
+        '''
+
         if self.run_logistic:
             self.fit_logistic_regression()
 
         if self.run_xgboost:
-            self.fit_xgboost()
+            self.fit_xgboost() # Run the XGBoost model
+            if self.feature_importance: # If we want feature importance we run the SHAP here
+                self.shap_feature_importance(model = self.model_xgboost, X = self.X_validation)
 
         if self.permutation_test:
             self.run_permutation_test(model = self.model_xgboost, X = self.X_train, y = self.y_train)
@@ -177,9 +192,9 @@ class ModelPipeline():
         # This is also a a line of code desinged to insure that the Tensorboard Graph appears
         _ = model(tf.zeros((1, timesteps, n_features)))
 
-        es = callbacks.EarlyStopping(monitor = 'val_precision', patience = 2000, mode ='max', restore_best_weights = True)
-        ckpt = callbacks.ModelCheckpoint('best_precision.keras', monitor='val_precision', mode='max', save_best_only=True)
-        rlrop = callbacks.ReduceLROnPlateau(monitor = 'val_precision', factor = 0.1, patience = 35, min_lr = 1e-4)
+        es = callbacks.EarlyStopping(monitor = 'val_pr_auc', patience = 2000, mode ='max', restore_best_weights = True)
+        ckpt = callbacks.ModelCheckpoint('best_model.keras', monitor='val_pr_auc', mode='max', save_best_only=True)
+        rlrop = callbacks.ReduceLROnPlateau(monitor='val_pr_auc', factor=0.5, patience=10, min_lr=1e-7)
 
         print(f'Tensor train_train: {self.X_train_tensor.shape}, y train_train {self.y_train.shape}')
         print(f'Tensor train_validation: {self.X_validation_tensor.shape}, y train_validation {self.y_validation.shape} popportion of sucessfull trades { round(100 * len(self.y_validation[self.y_validation[self.class_column] == True]) / len(self.y_validation), 2)}%')
@@ -209,7 +224,7 @@ class ModelPipeline():
                             callbacks = [es, ckpt, rlrop, tb_callback],
                             verbose = 1)
         
-        model.load_weights('best_precision.keras')
+        model.load_weights('best_model.keras')
         self.model_seq = model
 
         self.y_val_pred_nn_seq_proba = self.model_seq.predict(self.X_validation_tensor)
@@ -270,6 +285,8 @@ class ModelPipeline():
 
     def fit_xgboost(self):
         self.model_xgboost = XGBClassifier(eta = 0.01, n_estimators = 300, max_depth = 12, objective = 'binary:logistic', tree_method = 'hist', eval_metric = 'aucpr')
+        # Define a custom loss function matrix where misclassifying TP is much more harsh than TN        
+        
         self.model_xgboost.fit(self.X_train, self.y_train[self.class_column])
 
         self.y_val_pred_xgboost = self.model_xgboost.predict(self.X_validation)
@@ -289,6 +306,33 @@ class ModelPipeline():
             plt.title(f'Confusion Matrix: XGBoost(Baseline: 41%)')
             plt.show() 
 
+
+#######################EXPERIMENTAL CODE FOR PRECISION RECALL CURVE ##########################
+            precisions, recalls, thresholds = precision_recall_curve(
+                self.y_validation[self.class_column],
+                self.y_val_pred_xgboost_proba
+            )
+            plt.figure(figsize=(8, 5))
+            plt.plot(recalls, precisions, color='blue', lw=2)
+
+            # Annotate some threshold values along the curve
+            for t in [0.3, 0.4, 0.5, 0.6, 0.7]:
+                idx = np.argmin(np.abs(thresholds - t))
+                plt.annotate(f't={t}', xy=(recalls[idx], precisions[idx]),
+                            fontsize=8, color='red',
+                            arrowprops=dict(arrowstyle='->', color='red'),
+                            xytext=(recalls[idx] + 0.03, precisions[idx] - 0.03))
+                plt.scatter(recalls[idx], precisions[idx], color='red', s=40, zorder=5)
+
+            plt.xlabel('Recall')
+            plt.ylabel('Precision')
+            plt.title('Precision-Recall Curve XGBOOST')
+            plt.grid(True, linestyle='--', alpha=0.5)
+            plt.tight_layout()
+            plt.show()
+
+##################################################################################################################################
+            '''
             y_validation_ = self.y_validation.copy()
             y_validation_['Prediction'] = self.y_val_pred_xgboost
             y_validation_['Prediction Probability'] = self.y_val_pred_xgboost_proba
@@ -302,6 +346,7 @@ class ModelPipeline():
             plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'], alpha=0.8)
             plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker) il XGBoost', fontsize=14)
             plt.show()
+            '''
 
     def split_train_tensor(self, split_ratio = 0.8):
         split_idx = int(0.8 * self.X_train_tensor.shape[0])
@@ -365,6 +410,35 @@ class ModelPipeline():
             plt.title(f'Confusion Matrix: AdaBoost (Baseline: 41%)')
             plt.show() 
 
+    def fit_h2o_result(self):
+        self.h2o_model_2 = h2o.load_model(r"./models/h2o/DeepLearning_grid_2_AutoML_1_20260317_154413_model_6")
+        self.X_validation_h2o = h2o.H2OFrame(self.X_validation)
+        self.X_test_h2o = h2o.H2OFrame(self.X_test)
+
+        self.validation_h2o_model_2_pred_proba = self.h2o_model_2.predict(self.X_validation_h2o).as_data_frame()
+        self.validation_h2o_model_2_pred = (self.validation_h2o_model_2_pred_proba[[c for c in self.validation_h2o_model_2_pred_proba.columns if c != 'predict'][-1]] >= 0.50).astype(int)
+
+        self.test_h2o_model_2_pred_proba = self.h2o_model_2.predict(self.X_test_h2o).as_data_frame()
+        self.test_h2o_model_2_pred = (self.test_h2o_model_2_pred_proba[[c for c in self.test_h2o_model_2_pred_proba.columns if c != 'predict'][-1]] >= 0.50).astype(int)
+
+        cm = confusion_matrix(self.y_validation[self.class_column], self.validation_h2o_model_2_pred)
+        cm_test = confusion_matrix(self.y_test[self.class_column], self.test_h2o_model_2_pred)
+
+        self.val_pred_probs.append(self.validation_h2o_model_2_pred_proba)
+        self.test_pred_probs.append(self.test_h2o_model_2_pred_proba)
+
+        if self.plot_performance:
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
+            disp.plot(cmap='Blues')
+            plt.title(f'Confusion Matrix: H2O 2nd (Baseline: {self.y_validation[self.class_column].mean()*100:.2f}%)')
+            plt.show()
+
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm_test, display_labels=["No Trade", "Trade/Success"])
+            disp.plot(cmap='Blues')
+            plt.title(f'Confusion Matrix: H2O 2nd (Baseline: {self.y_test[self.class_column].mean()*100:.2f}%)')
+            plt.show()
+
+
 
     def fit_logistic_regression(self): # Fit the simplest classifier possible, a Logistic Regression
         self.model_logistic_regression = LogisticRegression(penalty= 'elasticnet', solver = 'saga', l1_ratio=0.5, max_iter = 1000)
@@ -387,7 +461,36 @@ class ModelPipeline():
             plt.title(f'Confusion Matrix: Logistic Regression (Baseline: {self.y_validation[self.class_column].mean()*100:.2f}%)')
             plt.show()
 
+#######################EXPERIMENTAL CODE FOR PRECISION RECALL CURVE ##########################
+            precisions, recalls, thresholds = precision_recall_curve(
+                self.y_validation[self.class_column],
+                self.y_val_pred_logistic
+            )
+            plt.figure(figsize=(8, 5))
+            plt.plot(recalls, precisions, color='blue', lw=2)
+
+            # Annotate some threshold values along the curve
+            for t in [0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9]:
+                idx = np.argmin(np.abs(thresholds - t))
+                plt.annotate(f't={t}', xy=(recalls[idx], precisions[idx]),
+                            fontsize=8, color='red',
+                            arrowprops=dict(arrowstyle='->', color='red'),
+                            xytext=(recalls[idx] + 0.03, precisions[idx] - 0.03))
+                plt.scatter(recalls[idx], precisions[idx], color='red', s=40, zorder=5)
+
+            plt.xlabel('Recall')
+            plt.ylabel('Precision')
+            plt.title('Precision-Recall Curve Logistic')
+            plt.grid(True, linestyle='--', alpha=0.5)
+            plt.tight_layout()
+            plt.show()
+
+##################################################################################################################################
+
+
+
 #------------------------------------- EXPERIMENTAL CODE TO TRACK AUTOCORRELATION -------------------------------------
+            '''
             y_validation_ = self.y_validation.copy()
             y_validation_['Prediction'] = self.y_val_pred_logistic
             y_validation_['Prediction Probability'] = self.y_val_pred_logistic_proba
@@ -401,6 +504,7 @@ class ModelPipeline():
             plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'], alpha=0.8)
             plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker) la Logistic Regression', fontsize=14)
             plt.show()
+            '''
 #---------------------------------------------------------------------------------------------------------------
 
     def fit_ensemble(self, ensemble_type = 'logistic_regression'):
@@ -446,35 +550,144 @@ class ModelPipeline():
 
             print(f'Bid-Ask Total wins: {round(wins_bid_ask.sum(), 2)}, Bid-Ask Total loses: {round(loses_bid_ask.sum(), 2)}, average win: {round(wins_bid_ask.mean(), 2)}, average loss: {round(loses_bid_ask.mean(), 2)}, num wins: {len(wins_bid_ask)}, num losses: {len(loses_bid_ask)}')
             print(f'Realistic Total wins: {round(wins_realistic.sum(), 2)}, Realistic Total loses: {round(loses_realistic.sum(), 2)}, average win: {round(wins_realistic.mean(), 2)}, average loss: {round(loses_realistic.mean(), 2)}, num wins: {len(wins_realistic)}, num losses: {len(loses_realistic)}')
-            
 
-            cm = confusion_matrix(self.y_validation[self.class_column], y_val_voting_pred)
-            disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
-            disp.plot(cmap='Blues')
-            plt.title(f'Confusion Matrix: Voting (Baseline: {self.y_validation[self.class_column].mean()*100:.2f}%)')
-            plt.show() 
+            self.y_val_returns_bid_ask = y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].values
+            self.y_val_returns_realistic = y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].values     
 
-            plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].reset_index(drop=True).cumsum(), label = 'Bid-Ask PNL Equity Curve')
-            plt.title('Ensemble: Bid Ask PNL equity curve')
-            plt.show()
+            if self.no_plotting == False:
+                cm = confusion_matrix(self.y_validation[self.class_column], y_val_voting_pred)
+                disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
+                disp.plot(cmap='Blues')
+                plt.title(f'Confusion Matrix: Voting (Baseline: {self.y_validation[self.class_column].mean()*100:.2f}%)')
+                plt.show() 
 
-            plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].reset_index(drop=True).cumsum(), label = 'Realistic PNL Equity Curve')
-            plt.title('Ensemble: Realistic PNL equity curve')
-            plt.show()
+                plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].reset_index(drop=True).cumsum(), label = 'Bid-Ask PNL Equity Curve')
+                plt.title('Ensemble: Bid Ask PNL equity curve')
+                plt.show()
 
-            # Make a plot of the serial correlation of the residuals of the trades and non trades
-            y_validation_['Prediction Probability'] = y_val_voting_proba
-            y_validation_['Residual'] = y_validation_[self.class_column] - y_validation_['Prediction Probability']
-            serial_correlation_dist = y_validation_.groupby('Ticker')['Residual'].apply(self.get_acf)
-            prop_ones = y_validation_.groupby('Ticker')['Prediction'].mean()
-            plot_data = pd.DataFrame({'ACF': serial_correlation_dist, 'Prop_1': prop_ones}).dropna()
+                plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].reset_index(drop=True).cumsum(), label = 'Realistic PNL Equity Curve')
+                plt.title('Ensemble: Realistic PNL equity curve')
+                plt.show()
 
-            weights_red = plot_data['Prop_1']
-            weights_blue = 1 - plot_data['Prop_1']
+                # Make a plot of the serial correlation of the residuals of the trades and non trades
+                y_validation_['Prediction Probability'] = y_val_voting_proba
+                y_validation_['Residual'] = y_validation_[self.class_column] - y_validation_['Prediction Probability']
+                serial_correlation_dist = y_validation_.groupby('Ticker')['Residual'].apply(self.get_acf)
+                prop_ones = y_validation_.groupby('Ticker')['Prediction'].mean()
+                plot_data = pd.DataFrame({'ACF': serial_correlation_dist, 'Prop_1': prop_ones}).dropna()
 
-            plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'],alpha=0.8)
-            plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker)', fontsize=14)
-            plt.show()
+                weights_red = plot_data['Prop_1']
+                weights_blue = 1 - plot_data['Prop_1']
+
+                plt.hist([plot_data['ACF'], plot_data['ACF']], bins=30, stacked=True, weights=[weights_blue, weights_red], color=['skyblue', 'red'], edgecolor='black', label=['Pred 0', 'Pred 1'],alpha=0.8)
+                plt.title('La Distribuzione ACF dei Residui (Analisi Panel per Ticker)', fontsize=14)
+                plt.show()
+
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+                                # Only keep the trades that the ensemble actually predicted as 1
+                plot_df = y_validation_[y_validation_['Prediction'] == 1].copy()
+
+                # Bring in the corresponding validation features for those same rows
+                plot_df['Log Market Cap'] = self.X_validation.loc[plot_df.index, 'Log Market Cap']
+                plot_df['IV Slope'] = self.X_validation.loc[plot_df.index, 'IV Slope']
+
+                # Drop missing values just in case
+                plot_df = plot_df.dropna(subset=['Log Market Cap', 'IV Slope', 'Realistic PNL', 'Bid Ask PNL'])
+
+                if len(plot_df) > 0:
+
+                    # -----------------------------
+                    # 1. Profitability vs Log Market Cap
+                    # -----------------------------
+                    plot_df['Log Market Cap Bin'] = pd.qcut(plot_df['Log Market Cap'], q=5, duplicates='drop')
+
+                    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+                    sns.boxplot(data=plot_df, x='Log Market Cap Bin', y='Realistic PNL', ax=axes[0])
+                    axes[0].set_title('Predicted Trades Only: Realistic PNL by Log Market Cap')
+                    axes[0].tick_params(axis='x', rotation=45)
+
+                    sns.boxplot(data=plot_df, x='Log Market Cap Bin', y='Bid Ask PNL', ax=axes[1])
+                    axes[1].set_title('Predicted Trades Only: Bid Ask PNL by Log Market Cap')
+                    axes[1].tick_params(axis='x', rotation=45)
+
+                    plt.tight_layout()
+                    plt.show()
+
+                    # Optional mean-profitability view by Log Market Cap bin
+                    mcap_summary = plot_df.groupby('Log Market Cap Bin', observed=False).agg(
+                        mean_realistic_pnl=('Realistic PNL', 'mean'),
+                        mean_bid_ask_pnl=('Bid Ask PNL', 'mean'),
+                        trade_count=('Prediction', 'size')
+                    ).reset_index()
+
+                    fig, axes = plt.subplots(1, 2, figsize=(16, 5))
+
+                    sns.barplot(data=mcap_summary, x='Log Market Cap Bin', y='mean_realistic_pnl', ax=axes[0])
+                    axes[0].set_title('Mean Realistic PNL by Log Market Cap')
+                    axes[0].tick_params(axis='x', rotation=45)
+
+                    sns.barplot(data=mcap_summary, x='Log Market Cap Bin', y='mean_bid_ask_pnl', ax=axes[1])
+                    axes[1].set_title('Mean Bid Ask PNL by Log Market Cap')
+                    axes[1].tick_params(axis='x', rotation=45)
+
+                    plt.tight_layout()
+                    plt.show()
+
+                    # -----------------------------
+                    # 2. Profitability vs IV Slope
+                    # -----------------------------
+                    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+                    sns.regplot(
+                        data=plot_df,
+                        x='IV Slope',
+                        y='Realistic PNL',
+                        lowess=True,
+                        scatter_kws={'alpha': 0.4, 's': 25},
+                        line_kws={'color': 'red'},
+                        ax=axes[0]
+                    )
+                    axes[0].set_title('Predicted Trades Only: Realistic PNL vs IV Slope')
+
+                    sns.regplot(
+                        data=plot_df,
+                        x='IV Slope',
+                        y='Bid Ask PNL',
+                        lowess=True,
+                        scatter_kws={'alpha': 0.4, 's': 25},
+                        line_kws={'color': 'red'},
+                        ax=axes[1]
+                    )
+                    axes[1].set_title('Predicted Trades Only: Bid Ask PNL vs IV Slope')
+
+                    plt.tight_layout()
+                    plt.show()
+
+                    # Optional binned view for IV Slope
+                    plot_df['IV Slope Bin'] = pd.qcut(plot_df['IV Slope'], q=5, duplicates='drop')
+
+                    fig, axes = plt.subplots(1, 2, figsize=(16, 6))
+
+                    sns.boxplot(data=plot_df, x='IV Slope Bin', y='Realistic PNL', ax=axes[0])
+                    axes[0].set_title('Predicted Trades Only: Realistic PNL by IV Slope Bin')
+                    axes[0].tick_params(axis='x', rotation=45)
+
+                    sns.boxplot(data=plot_df, x='IV Slope Bin', y='Bid Ask PNL', ax=axes[1])
+                    axes[1].set_title('Predicted Trades Only: Bid Ask PNL by IV Slope Bin')
+                    axes[1].tick_params(axis='x', rotation=45)
+
+                    plt.tight_layout()
+                    plt.show()
+
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+#----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------
+
 
         if ensemble_type == 'grnn':
             from a1_grnn import GRNN
@@ -678,7 +891,10 @@ class ModelPipeline():
             'y_val_pred_ada': self.y_val_pred_ada if hasattr(self, 'y_val_pred_ada') else None,
             'y_val_pred_ada_proba': self.y_val_pred_ada_proba if hasattr(self, 'y_val_pred_ada_proba') else None,
             'y_val_prediction': self.y_val_prediction if hasattr(self, 'y_val_prediction') else None,
-            'y_val_prediction_proba': self.y_val_prediction_proba if hasattr(self, 'y_val_prediction_proba') else None
+            'y_val_prediction_proba': self.y_val_prediction_proba if hasattr(self, 'y_val_prediction_proba') else None,
+            'y_val_returns_bid_ask': self.y_val_returns_bid_ask if hasattr(self, 'y_val_returns_bid_ask') else None,
+            'y_val_returns_realistic': self.y_val_returns_realistic if hasattr(self, 'y_val_returns_realistic') else None
+
         }
     
     def return_predictions_test(self):
@@ -697,8 +913,230 @@ class ModelPipeline():
             'y_test_prediction_proba': self.y_test_prediction_proba if hasattr(self, 'y_test_prediction_proba') else None
         }
 
+    def shap_feature_importance(self, model, X):
+        import shap
+        import copy
 
+        explainer = shap.TreeExplainer(model)
+        shap_values = explainer(X)
+
+        shap_values_prob = copy.deepcopy(shap_values)
+        v = shap_values.values
+        b = shap_values.base_values
+        def sigmoid(x): return 1 / (1 + np.exp(-x))
+        shap_values_prob.values = sigmoid(b[:, np.newaxis] + v) - sigmoid(b[:, np.newaxis])
+        shap_values_prob.base_values = sigmoid(b)
+
+        shap.plots.beeswarm(shap_values_prob)
+        shap.summary_plot(shap_values, X, plot_type="bar")
+
+
+
+    def select_h2o_threshold_for_precision(self, y_true, y_proba, min_recall = 0.05):
+        y_true = np.asarray(y_true).astype(int)
+        y_proba = np.asarray(y_proba, dtype=float)
+
+        precision_curve, recall_curve, thresholds = precision_recall_curve(y_true, y_proba)
+
+        if thresholds.size == 0:
+            fallback_threshold = 0.5
+            y_pred = (y_proba >= fallback_threshold).astype(int)
+            recall_value = recall_score(y_true, y_pred, zero_division=0)
+
+            return {
+                'threshold': fallback_threshold,
+                'precision': precision_score(y_true, y_pred, zero_division=0),
+                'recall': recall_value,
+                'f1': f1_score(y_true, y_pred, zero_division=0),
+                'positive_predictions': int(y_pred.sum()),
+                'meets_recall_constraint': recall_value >= min_recall,
+            }
+
+        threshold_metrics = pd.DataFrame({
+            'threshold': thresholds,
+            'precision': precision_curve[:-1],
+            'recall': recall_curve[:-1],
+        }).replace([np.inf, -np.inf], np.nan)
+
+        threshold_metrics = threshold_metrics.dropna(subset=['threshold', 'precision', 'recall'])
+        valid_thresholds = threshold_metrics[threshold_metrics['recall'] >= min_recall].copy()
+        meets_recall_constraint = not valid_thresholds.empty
+
+        if not meets_recall_constraint:
+            valid_thresholds = threshold_metrics.copy()
+
+        best_row = valid_thresholds.sort_values(
+            ['precision', 'recall', 'threshold'],
+            ascending=[False, False, False],
+            kind='stable'
+        ).iloc[0]
+
+        best_threshold = float(best_row['threshold'])
+        y_pred = (y_proba >= best_threshold).astype(int)
+
+        return {
+            'threshold': best_threshold,
+            'precision': precision_score(y_true, y_pred, zero_division=0),
+            'recall': recall_score(y_true, y_pred, zero_division=0),
+            'f1': f1_score(y_true, y_pred, zero_division=0),
+            'positive_predictions': int(y_pred.sum()),
+            'meets_recall_constraint': meets_recall_constraint,
+        }
+
+
+    def fit_automl_h2o(self):
+        from h2o.automl import H2OAutoML
+
+        # Combine features + label for H2O
+        train_df = self.X_train.copy()
+        train_df[self.class_column] = self.y_train[self.class_column].values
+
+        val_df = self.X_validation.copy()
+        val_df[self.class_column] = self.y_validation[self.class_column].values
+
+        # Convert to H2O frames
+        train_h2o = h2o.H2OFrame(train_df)
+        val_h2o   = h2o.H2OFrame(val_df)
+
+        # H2O needs the target as a categorical for classification
+        train_h2o[self.class_column] = train_h2o[self.class_column].asfactor()
+        val_h2o[self.class_column]   = val_h2o[self.class_column].asfactor()
+
+        aml = H2OAutoML(
+            max_models=50,              # train as many as possible
+            max_runtime_secs=3600,
+            seed=42,
+            nfolds=0,                   # disable CV so our validation frame is respected
+            stopping_metric='AUCPR',    # closest native proxy for precision
+            sort_metric='AUCPR',
+            keep_cross_validation_predictions=False,
+        )
+
+        aml.train(
+            y=self.class_column,
+            training_frame=train_h2o,
+            leaderboard_frame=val_h2o,  # rank models on your validation set
+        )
+
+        # --- Native leaderboard (sorted by AUCPR) ---
+        self.automl_h2o_leaderboard = aml.leaderboard.as_data_frame(use_multi_thread=True)
+        print(self.automl_h2o_leaderboard)
+
+        # --- Rank models by the best validation threshold that keeps recall above the minimum ---
+        results = []
+        y_true = self.y_validation[self.class_column].astype(int).values
+        for model_id in self.automl_h2o_leaderboard['model_id']:
+            model = h2o.get_model(model_id)
+            preds = model.predict(val_h2o).as_data_frame(use_multi_thread=True)
+
+            prob_col = 'p1' if 'p1' in preds.columns else [c for c in preds.columns if c != 'predict'][-1]
+            y_proba = preds[prob_col].astype(float).values
+
+            threshold_metrics = self.select_h2o_threshold_for_precision(
+                y_true=y_true,
+                y_proba=y_proba,
+                min_recall=self.h2o_min_recall
+            )
+
+            try:
+                pr_auc = average_precision_score(y_true, y_proba)
+            except ValueError:
+                pr_auc = np.nan
+
+            try:
+                roc_auc = roc_auc_score(y_true, y_proba)
+            except ValueError:
+                roc_auc = np.nan
+
+            results.append({
+                'model_id': model_id,
+                'threshold': threshold_metrics['threshold'],
+                'precision': threshold_metrics['precision'],
+                'recall': threshold_metrics['recall'],
+                'f1': threshold_metrics['f1'],
+                'positive_predictions': threshold_metrics['positive_predictions'],
+                'meets_recall_constraint': threshold_metrics['meets_recall_constraint'],
+                'pr_auc': pr_auc,
+                'roc_auc': roc_auc,
+            })
+
+        self.automl_h2o_precision_leaderboard = (
+            pd.DataFrame(results)
+            .sort_values(
+                ['meets_recall_constraint', 'precision', 'recall', 'pr_auc'],
+                ascending=[False, False, False, False]
+            )
+            .reset_index(drop=True)
+        )
+
+        print(f"\n--- Leaderboard sorted by validation precision with recall >= {self.h2o_min_recall:.0%} ---")
+        print(self.automl_h2o_precision_leaderboard)
+        
+
+        # Best model by precision under the validation recall constraint
+        best_row = self.automl_h2o_precision_leaderboard.iloc[0]
+        best_id = best_row['model_id']
+        self.automl_h2o_best_threshold = float(best_row['threshold'])
+        self.automl_h2o_best_model = h2o.get_model(best_id)
+        best_preds = self.automl_h2o_best_model.predict(val_h2o).as_data_frame(use_multi_thread=True)
+        best_prob_col = 'p1' if 'p1' in best_preds.columns else [c for c in best_preds.columns if c != 'predict'][-1]
+        self.automl_h2o_best_model_val_proba = best_preds[best_prob_col].astype(float).values
+        self.automl_h2o_best_model_val_pred = (self.automl_h2o_best_model_val_proba >= self.automl_h2o_best_threshold).astype(int)
+        self.automl_h20_best_model_val_pred = self.automl_h2o_best_model_val_pred
+
+        cm = confusion_matrix(
+        y_true,
+        self.automl_h2o_best_model_val_pred
+        )
+
+        # Save the top N models together with the threshold selected on the validation set
+        os.makedirs('./models/h2o', exist_ok=True)
+        self.saved_h2o_model_paths = {}
+        self.saved_h2o_model_thresholds = {}
+
+        for i, row in enumerate(self.automl_h2o_precision_leaderboard.head(self.h2o_top_n_models).itertuples(index=False), start=1):
+            model_id = row.model_id
+            model = h2o.get_model(model_id)
+            path = h2o.save_model(model=model, path='./models/h2o', force=True)
+            self.saved_h2o_model_paths[model_id] = path
+            self.saved_h2o_model_thresholds[model_id] = float(row.threshold)
+            print(
+                f"Saved model {i}: {model_id} -> {path} | "
+                f"threshold={float(row.threshold):.6f}, precision={float(row.precision):.4f}, recall={float(row.recall):.4f}"
+            )
+
+
+        self.automl_h2o_precision_leaderboard['saved_path'] = self.automl_h2o_precision_leaderboard['model_id'].map(self.saved_h2o_model_paths)
+        self.automl_h2o_precision_leaderboard.to_excel('h20_models.xlsx', index=False)
+        disp = ConfusionMatrixDisplay(
+            confusion_matrix=cm,
+            display_labels=['Negative', 'Positive']
+        )
+
+        disp.plot(cmap='Blues', colorbar=False)
+        disp.ax_.set_title(
+            f'Confusion Matrix - Best H2O Model @ threshold {self.automl_h2o_best_threshold:.4f}'
+        )
+        plt.tight_layout()
+        plt.show()
+
+        
+
+
+        h2o.shutdown(prompt=False)
+
+
+
+        '''
+        # Final predictions on test set
+        test_h2o = h2o.H2OFrame(self.X_test.copy())
+        test_preds = self.automl_h2o_best_model.predict(test_h2o).as_data_frame()
+        self.y_test_pred_automl_h2o       = test_preds['predict'].astype(int).values
+        self.y_test_pred_automl_h2o_proba = test_preds['p1'].values
+        '''
+
+    
 
 if __name__ == '__main__':
-    ModelPipeline(plot_correlation_matrix= False, plot_performance= True, class_column = 'Implied > Realized',classification_threshold= 0.5, polynomial_expansion_degree= 1, synthetic_data_multiplyer= 0, 
-                  visualize_synthetic_data= False, run_hybrid= True, synthetic_generator= 'Sequential')
+    ModelPipeline(plot_correlation_matrix= False, plot_performance= True, class_column = 'Profitable Trade',classification_threshold= 0.5, polynomial_expansion_degree= 1, synthetic_data_multiplyer= 0, 
+                  visualize_synthetic_data= False, run_hybrid= False, synthetic_generator= 'Sequential', no_plotting = False, feature_importance= False)

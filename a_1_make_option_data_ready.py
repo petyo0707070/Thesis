@@ -312,7 +312,11 @@ class CalculateFeatureMatrixes():
                 if self.verbose:
                     print(f'Cose t0 {close_t0}, strike prices {strike_prices}')
 
-                atm_strike = strike_prices.iloc[(strike_prices - close_t0).abs().idxmin()]
+                try:
+                    atm_strike = strike_prices.iloc[(strike_prices - close_t0).abs().idxmin()]
+                except:
+                    self.save_nan_values(t, q_string)
+                    continue
 
                 # Get the Call and Put at t = 0
                 call_t0 = options_t0_front_month[(options_t0_front_month['strike_price'] == atm_strike) & (options_t0_front_month['cp_flag'] == 'C')]
@@ -350,16 +354,20 @@ class CalculateFeatureMatrixes():
 
                     if len(available_back_strikes) > 0: # If there are strikes in the back month which there should be
 
-                        closest_back_strike = available_back_strikes[np.abs(available_back_strikes - atm_strike).argmin()]
+                        try:
+                            closest_back_strike = available_back_strikes[np.abs(available_back_strikes - atm_strike).argmin()]
 
-                        backmonth_t0 = options_t0_back_month[options_t0_back_month['strike_price'] == closest_back_strike]
+                            backmonth_t0 = options_t0_back_month[options_t0_back_month['strike_price'] == closest_back_strike]
 
-                        call_iv_back_month = backmonth_t0[backmonth_t0['cp_flag'] == 'C']['impl_volatility'].values[0]
-                        put_iv_back_month = backmonth_t0[backmonth_t0['cp_flag'] == 'P']['impl_volatility'].values[0]
+                            call_iv_back_month = backmonth_t0[backmonth_t0['cp_flag'] == 'C']['impl_volatility'].values[0]
+                            put_iv_back_month = backmonth_t0[backmonth_t0['cp_flag'] == 'P']['impl_volatility'].values[0]
 
-                        back_month_iv = (call_iv_back_month + put_iv_back_month) / 2
-                        implied_move = self.event_expected_move(front_month_iv, back_month_iv, front_month, back_month, 1)
-                        iv_slope = (front_month_iv - back_month_iv) / (back_month - front_month)
+                            back_month_iv = (call_iv_back_month + put_iv_back_month) / 2
+                            implied_move = self.event_expected_move(front_month_iv, back_month_iv, front_month, back_month, 1)
+                            iv_slope = (front_month_iv - back_month_iv) / (back_month - front_month)
+                        except:
+                            implied_move = self.event_expected_move_front_vol(front_month_iv)
+                            iv_slope = np.nan
                     
                     else:
                         implied_move = self.event_expected_move_front_vol(front_month_iv)
@@ -902,6 +910,9 @@ class FlattenFeatures():
                 realized_move_pct_abs_1 = np.nan
                 realized_move_pct_abs_2 = np.nan
 
+
+
+
             # Get the values of the lagged variables 
             pnl_bid_ask_8 = auxiliary_info['PNL Bid-Ask'].sum() / len(auxiliary_info)
             pnl_realistic_8 = auxiliary_info['PNL Realistic'].sum() / len(auxiliary_info)
@@ -910,6 +921,7 @@ class FlattenFeatures():
             realized_move_pct_2 = auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]['Realized Move Pct'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]) == 1 else np.nan
             realized_move_pct_abs_1 = auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]['Realized Move Pct Abs'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Previous Quarter']]) == 1 else np.nan
             realized_move_pct_abs_2 = auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]['Realized Move Pct Abs'].iloc[0] if len(auxiliary_info[auxiliary_info['Quarter'] == row['Quarter 2 Ago']]) == 1 else np.nan
+
 
             # Add the values of the lagged variables to the respective list so that we can add it to the X values
             pnl_bid_ask_8_list.append(pnl_bid_ask_8)
@@ -945,8 +957,21 @@ class FlattenFeatures():
         self.df_X.to_csv(r'D:\Option Data\unscaled_features\X_1.csv', index = False)
         self.df_y.to_csv(r'D:\Option Data\unscaled_features\y_1.csv', index = False)
 
+
 if __name__ == '__main__':
-    #PartionOptionData()
-    #PreprocessOptionData()
-    #CalculateFeatureMatrixes(verbose= False)
+    #PartionOptionData( r'D:\Option Data\options_7.csv')
+    #PreprocessOptionData(ticker_number= 7)
+    #CalculateFeatureMatrixes(ticker_number= 7, verbose= True)
     FlattenFeatures(verbose= True)
+
+    '''
+    PartionOptionData( r'D:\Option Data\options_9.csv')
+    PreprocessOptionData(ticker_number= 9)
+    CalculateFeatureMatrixes(ticker_number= 9, verbose= True)
+    FlattenFeatures(verbose= True)
+
+    PartionOptionData( r'D:\Option Data\options_10.csv')
+    PreprocessOptionData(ticker_number= 10)
+    CalculateFeatureMatrixes(ticker_number= 10, verbose= True)
+    FlattenFeatures(verbose= True)
+    '''
