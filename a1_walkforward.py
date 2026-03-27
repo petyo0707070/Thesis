@@ -22,8 +22,7 @@ class WalkForward():  # This is a Walk Forward class that does the Level I Walkf
     def generate_folds(self):
         # Initialize the first run
         current_train_start = self.train_start
-        current_train_end = self.train_start + pd.offsets.QuarterEnd(
-            self.train_size)  # We subtract one day to get the last day of the quarter
+        current_train_end = self.train_start + pd.offsets.QuarterEnd(self.train_size)  # We subtract one day to get the last day of the quarter
 
         # This will hold the results the Level I OoS performance
         self.oos_results_lv1 = []
@@ -32,8 +31,7 @@ class WalkForward():  # This is a Walk Forward class that does the Level I Walkf
         fold_index = 1
         # This loops over all the folds
         while current_train_end + pd.offsets.QuarterEnd(self.validation_size) <= self.train_end:
-            val_start = current_train_end + pd.Timedelta(
-                days=1)  # The validation starts the day after the training ends
+            val_start = current_train_end + pd.Timedelta(days=1)  # The validation starts the day after the training ends
             val_end = val_start + pd.offsets.QuarterEnd(self.validation_size)  #
 
             print(
@@ -45,7 +43,7 @@ class WalkForward():  # This is a Walk Forward class that does the Level I Walkf
                                      plot_performance=False, plot_correlation_matrix=False, run_logistic=True,
                                      run_xgboost=True, run_hybrid=False, run_ada=True,
                                      synthetic_data_multiplyer=0, visualize_synthetic_data=False,
-                                     synthetic_generator='GAN', no_plotting=True, classification_threshold = 0.70, polynomial_expansion_degree= 1)
+                                     synthetic_generator='GAN', no_plotting=True, classification_threshold = 0.60, polynomial_expansion_degree= 1)
 
             oos_results = pipeline.return_predictions_validation()  # Get the LV1 OOS perforamance of the fold
             self.oos_results_lv1.extend(oos_results['y_val_returns_realistic'])
@@ -54,8 +52,7 @@ class WalkForward():  # This is a Walk Forward class that does the Level I Walkf
             current_train_end = current_train_end + pd.offsets.QuarterEnd(self.step_size)
 
         # Plot the lv1 OOS performance
-        cleaned_list = [x for x in self.oos_results_lv1 if not (isinstance(x, float) and math.isnan(
-            x))]  # Drop the NA values as for some reason they appear and destroy plotting
+        cleaned_list = [x for x in self.oos_results_lv1 if not (isinstance(x, float) and math.isnan(x))]  # Drop the NA values as for some reason they appear and destroy plotting
         plt.plot(np.cumsum(cleaned_list))
         plt.title('Level I Walkforward Perforamance % of Premium Sold')
         plt.ylabel('% of Premium Sold')

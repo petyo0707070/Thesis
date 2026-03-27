@@ -7,8 +7,7 @@ from tensorflow.keras import layers, models, callbacks
 import sys
 import matplotlib.pyplot as plt
 from xgboost import XGBClassifier
-from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, precision_recall_curve, precision_score, \
-    recall_score, f1_score, roc_auc_score, average_precision_score
+from sklearn.metrics import confusion_matrix, ConfusionMatrixDisplay, precision_recall_curve, precision_score, recall_score, f1_score, roc_auc_score, average_precision_score, matthews_corrcoef
 from sklearn.ensemble import AdaBoostClassifier
 from sklearn.tree import DecisionTreeClassifier
 from itertools import combinations_with_replacement
@@ -95,9 +94,9 @@ class ModelPipeline():
                                     col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
 
         # -----------------------------------THIS OVERWRITES THE CLASS TO USE REALISTIC PNL TO SEE HOW THE MODEL IMPROVES------------------------------------------------------------------------------------
-        self.y_train[self.class_column] = self.y_train['Realistic PNL'] >= 0.0
-        self.y_validation[self.class_column] = self.y_validation['Realistic PNL'] >= 0.0
-        self.y_test[self.class_column] = self.y_test['Realistic PNL'] >= 0.0
+        self.y_train[self.class_column] = self.y_train['Realistic PNL'] >= 0.2
+        self.y_validation[self.class_column] = self.y_validation['Realistic PNL'] >= 0.2
+        self.y_test[self.class_column] = self.y_test['Realistic PNL'] >= 0.2
         # -----------------------------------------------------------------------------------------------------------------------
 
         # Implements the generation of synthetic data that would perhaps be useful to train better generalizable models
@@ -256,6 +255,9 @@ class ModelPipeline():
 
         self.test_pred_probs.append(self.y_test_pred_nn_seq_proba.flatten())
 
+        self.y_val_nn_seq_mcc = matthews_corrcoef(self.y_validation[self.class_column], self.y_val_pred_nn_seq)
+        self.y_test_nn_seq_mcc = matthews_corrcoef(self.y_test[self.class_column], self.y_test_pred_nn_seq)
+
         # Extract the embeddings from the Train, Validation and Test tensors
         self.training_embeddings = self.extract_embeddings(self.X_train_tensor)
         self.validation_embeddings = self.extract_embeddings(self.X_validation_tensor)
@@ -279,12 +281,23 @@ class ModelPipeline():
         self.val_pred_probs.append(self.y_val_pred_model_embeddings_proba)
         self.test_pred_probs.append(self.y_test_pred_model_embeddings_proba)
 
-        cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_model_embeddings)
+        self.y_val_model_embeddings_mcc = matthews_corrcoef(self.y_validation[self.class_column], self.y_val_pred_model_embeddings)
+        self.y_test_model_embeddings_mcc = matthews_corrcoef(self.y_test[self.class_column], self.y_test_pred_model_embeddings)
+
+        
 
         if self.plot_performance:
+            cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_nn_seq)
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
-            plt.title(f'Confusion Matrix: XGBoost with Embeddings (Baseline: 41%)')
+            plt.title(
+                f'Confusion Matrix: NN (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%), MCC: {self.y_val_nn_seq_mcc * 100:.2f}%')
+            plt.show()
+
+            cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_model_embeddings)
+            disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
+            disp.plot(cmap='Blues')
+            plt.title(f'Confusion Matrix: XGBoost with Embeddings (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%), MCC: {self.y_val_model_embeddings_mcc  * 100:.2f}%')
             plt.show()
 
             y_validation_ = self.y_validation.copy()
@@ -319,6 +332,8 @@ class ModelPipeline():
         self.y_test_pred_xgboost_proba = self.model_xgboost.predict_proba(self.X_test)[:, 1]
         self.y_test_pred_xgboost = (self.y_test_pred_xgboost_proba >= self.classification_threshold).astype(int).flatten()
 
+        self.y_val_xgboost_mcc = matthews_corrcoef(self.y_validation[self.class_column], self.y_val_pred_xgboost)
+        self.y_test_xgboost_mcc = matthews_corrcoef(self.y_test[self.class_column], self.y_test_pred_xgboost)
 
         cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_xgboost)
 
@@ -328,7 +343,7 @@ class ModelPipeline():
         if self.plot_performance:
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
-            plt.title(f'Confusion Matrix: XGBoost(Baseline: 41%)')
+            plt.title(f'Confusion Matrix: XGBoost(Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%), MCC: {self.y_val_xgboost_mcc  * 100:.2f}%')
             plt.show()
 
             #######################EXPERIMENTAL CODE FOR PRECISION RECALL CURVE ##########################
@@ -422,8 +437,12 @@ class ModelPipeline():
         self.y_val_pred_ada = (self.y_val_pred_ada_proba >= self.classification_threshold).astype(int).flatten()
 
 
-        self.y_test_pred_ada_proba = self.model_ada_boost.predict_proba(self.X_test_masked)
+        self.y_test_pred_ada_proba = self.model_ada_boost.predict_proba(self.X_test_masked)[:, 1]
         self.y_test_pred_ada = (self.y_test_pred_ada_proba >= self.classification_threshold).astype(int).flatten()
+
+        
+        self.y_val_ada_mcc = matthews_corrcoef(self.y_validation[self.class_column], self.y_val_pred_ada)
+        self.y_test_ada_mcc = matthews_corrcoef(self.y_test[self.class_column], self.y_test_pred_ada)
 
 
         self.val_pred_probs.append(self.y_val_pred_ada_proba)
@@ -431,9 +450,10 @@ class ModelPipeline():
 
         cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_ada)
         if self.plot_performance:
+
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
-            plt.title(f'Confusion Matrix: AdaBoost (Baseline: 41%)')
+            plt.title(f'Confusion Matrix: AdaBoost (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%), MCC: {self.y_val_ada_mcc  * 100:.2f}%')
             plt.show()
 
     def fit_h2o_result(self):
@@ -480,6 +500,9 @@ class ModelPipeline():
         self.y_test_pred_logistic_proba = self.model_logistic_regression.predict_proba(self.X_test_masked)[:, 1]
         self.y_test_pred_logistic = (self.y_test_pred_logistic_proba >= self.classification_threshold).astype(int).flatten()
 
+        self.y_val_logistic_mcc = matthews_corrcoef(self.y_validation[self.class_column], self.y_val_pred_logistic)
+        self.y_test_logistic_mcc = matthews_corrcoef(self.y_test[self.class_column], self.y_test_pred_logistic)
+
         cm = confusion_matrix(self.y_validation[self.class_column], self.y_val_pred_logistic)
 
         self.val_pred_probs.append(self.y_val_pred_logistic_proba)
@@ -489,7 +512,7 @@ class ModelPipeline():
             disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
             disp.plot(cmap='Blues')
             plt.title(
-                f'Confusion Matrix: Logistic Regression (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%)')
+                f'Confusion Matrix: Logistic Regression (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%), MCC: {self.y_val_logistic_mcc * 100:.2f}%')
             plt.show()
 
             #######################EXPERIMENTAL CODE FOR PRECISION RECALL CURVE ##########################
@@ -571,6 +594,8 @@ class ModelPipeline():
             self.y_val_prediction = y_val_voting_pred
             self.y_val_prediction_proba = y_val_voting_proba
 
+            self.y_val_mcc = matthews_corrcoef(self.y_validation[self.class_column], self.y_val_prediction)
+
             y_validation_ = self.y_validation.copy()
             y_validation_['Prediction'] = y_val_voting_pred
 
@@ -597,7 +622,7 @@ class ModelPipeline():
                 disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
                 disp.plot(cmap='Blues')
                 plt.title(
-                    f'Confusion Matrix: Voting (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%)')
+                    f'Confusion Matrix: Voting (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%), MCC: {self.y_val_mcc * 100:.2f}%')
                 plt.show()
 
                 plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].reset_index(drop=True).cumsum(),
@@ -684,6 +709,50 @@ class ModelPipeline():
             disp.plot(cmap='Blues')
             plt.title(f'Confusion Matrix: Voting (Baseline: 41%)')
             plt.show()
+
+        if ensemble_type == 'no_voting':
+            
+
+            matrix_pred_probas = np.array(self.val_pred_probs)
+            y_val_voting_proba = np.max(matrix_pred_probas, axis=0)
+            y_val_voting_pred = (y_val_voting_proba >= self.classification_threshold).astype(int)
+            y_val_voting_pred = y_val_voting_pred
+            self.y_val_prediction = y_val_voting_pred
+            self.y_val_prediction_proba = y_val_voting_proba
+            self.y_val_mcc = matthews_corrcoef(self.y_validation[self.class_column], self.y_val_prediction)
+            y_validation_ = self.y_validation.copy()
+            y_validation_['Prediction'] = y_val_voting_pred
+            wins_bid_ask = y_validation_[(y_validation_['Bid Ask PNL'] >= 0) & (y_validation_['Prediction'] == 1)][
+                'Bid Ask PNL']
+            loses_bid_ask = y_validation_[(y_validation_['Bid Ask PNL'] < 0) & (y_validation_['Prediction'] == 1)][
+                'Bid Ask PNL']
+            wins_realistic = y_validation_[(y_validation_['Realistic PNL'] >= 0) & (y_validation_['Prediction'] == 1)][
+                'Realistic PNL']
+            loses_realistic = y_validation_[(y_validation_['Realistic PNL'] < 0) & (y_validation_['Prediction'] == 1)][
+                'Realistic PNL']
+            print(
+                f'Bid-Ask Total wins: {round(wins_bid_ask.sum(), 2)}, Bid-Ask Total loses: {round(loses_bid_ask.sum(), 2)}, average win: {round(wins_bid_ask.mean(), 2)}, average loss: {round(loses_bid_ask.mean(), 2)}, num wins: {len(wins_bid_ask)}, num losses: {len(loses_bid_ask)}')
+            print(
+                f'Realistic Total wins: {round(wins_realistic.sum(), 2)}, Realistic Total loses: {round(loses_realistic.sum(), 2)}, average win: {round(wins_realistic.mean(), 2)}, average loss: {round(loses_realistic.mean(), 2)}, num wins: {len(wins_realistic)}, num losses: {len(loses_realistic)}')
+            self.y_val_returns_bid_ask = y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].values
+            self.y_val_returns_realistic = y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].values
+
+            if self.no_plotting == False:
+                cm = confusion_matrix(self.y_validation[self.class_column], y_val_voting_pred)
+                disp = ConfusionMatrixDisplay(confusion_matrix=cm, display_labels=["No Trade", "Trade/Success"])
+                disp.plot(cmap='Blues')
+                plt.title(
+                    f'Confusion Matrix: No Voting (Baseline: {self.y_validation[self.class_column].mean() * 100:.2f}%), MCC: {self.y_val_mcc * 100:.2f}%')
+                plt.show()
+                plt.plot(y_validation_[y_validation_['Prediction'] == 1]['Bid Ask PNL'].reset_index(drop=True).cumsum(),
+                        label='Bid-Ask PNL Equity Curve')
+                plt.title('Ensemble: Bid Ask PNL equity curve')
+                plt.show()
+                plt.plot(
+                    y_validation_[y_validation_['Prediction'] == 1]['Realistic PNL'].reset_index(drop=True).cumsum(),
+                    label='Realistic PNL Equity Curve')
+                plt.title('Ensemble: Realistic PNL equity curve')
+                plt.show()
 
     def run_permutation_test(self, model, X, y, n_iterations=200):
         from sklearn.base import clone
