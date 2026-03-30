@@ -85,6 +85,10 @@ class ModelPipeline():
         self.y_validation.reset_index(inplace=True, drop=True)
         self.y_test.reset_index(inplace=True, drop=True)
 
+        ###########################################################################################
+        self.generate_hmm_vol_regimes()
+        ############################################################################################
+
         # Drop columns which we will not use for fitting the model
         self.X_train = self.X_train_[[col for col in self.X_train_.columns if
                                       col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
@@ -94,9 +98,9 @@ class ModelPipeline():
                                     col != 'Ticker' and col != 'Q-String' and col != 'Date' and col != 'Kurt Delta' and col != 'PNL Realistic (8)']]
 
         # -----------------------------------THIS OVERWRITES THE CLASS TO USE REALISTIC PNL TO SEE HOW THE MODEL IMPROVES------------------------------------------------------------------------------------
-        self.y_train[self.class_column] = self.y_train['Realistic PNL'] >= 0.2
-        self.y_validation[self.class_column] = self.y_validation['Realistic PNL'] >= 0.2
-        self.y_test[self.class_column] = self.y_test['Realistic PNL'] >= 0.2
+        self.y_train[self.class_column] = self.y_train['Realistic PNL'] >= 0.15
+        self.y_validation[self.class_column] = self.y_validation['Realistic PNL'] >= 0.15
+        self.y_test[self.class_column] = self.y_test['Realistic PNL'] >= 0.15
         # -----------------------------------------------------------------------------------------------------------------------
 
         # Implements the generation of synthetic data that would perhaps be useful to train better generalizable models
@@ -1191,6 +1195,73 @@ class ModelPipeline():
         self.y_test_pred_automl_h2o       = test_preds['predict'].astype(int).values
         self.y_test_pred_automl_h2o_proba = test_preds['p1'].values
         '''
+
+    def generate_hmm_vol_regimes(self):
+        from hmmlearn.hmm import GaussianHMM, GMMHMM
+
+        df = pd.read_csv('vix_timeseries.csv')
+        df['DATE'] = pd.to_datetime(df['DATE'])
+        df['Vix'] = df['CLOSE']
+        df['Vix Change'] = df['Vix'] - df['Vix'].shift(1)
+        df.dropna(inplace = True)
+        df.set_index('DATE', inplace = True)
+
+        X = df[['Vix', 'Vix Change']]
+
+        # Split the Vix into training, testing and val in order to assign to the actual 
+        X_train = df[(df.index >= self.train_start_date) & (df.index  <= self.train_end_date)][['Vix', 'Vix Change']]
+        X_validation = df[(df.index  > self.train_end_date) & (df.index  <= self.validation_end_date)][['Vix', 'Vix Change']]
+        X_test = df[(df.index  > self.validation_end_date) & (df.index  <= self.test_end_date)][['Vix', 'Vix Change']]
+        model = GMMHMM(n_components=3, n_mix = 1 ,covariance_type='full', n_iter= 2000)
+        model.fit(X_train)
+
+        # insure that the HMM returns the regimes in terms of their VIX mean in an ascending order
+        order = np.argsort(model.means_[:, 0, 0])
+        model.startprob_ = model.startprob_[order]
+        model.transmat_ = model.transmat_[order][:, order]
+        model.means_ = model.means_[order]
+        model.covars_ = model.covars_[order]
+
+        train_predictions = model.predict(X_train)
+        train_predictions = [1 if x == 2 else 0 for x in train_predictions]
+        X_train['Regime'] = train_predictions
+        self.X_train_ = pd.merge(self.X_train_, X_train[['Regime']], how = 'left', left_on='Date', right_index = True)
+
+
+        validation_predictions = model.predict(X_validation)
+        validation_predictions = [1 if x == 2 else 0 for x in validation_predictions]
+        X_validation['Regime'] = validation_predictions
+        self.X_validation_ = pd.merge(self.X_validation_, X_validation[['Regime']], how = 'left', left_on='Date', right_index = True)
+
+
+        test_predictions = model.predict(X_test)
+        test_predictions = [1 if x == 2 else 0 for x in test_predictions]
+        X_test['Regime'] = test_predictions
+        self.X_test_ = pd.merge(self.X_test_, X_test[['Regime']], how = 'left', left_on='Date', right_index = True)
+
+        '''=
+        self.X_train_ = self.X_train_[self.X_train_['Regime'] == 0]
+        self.X_validation_ = self.X_validation_[self.X_validation_['Regime'] == 0]
+        self.X_test_ = self.X_test_[self.X_test_['Regime'] == 0]
+
+        self.y_train = self.y_train.loc[self.X_train_.index,:]
+        self.y_validation = self.y_validation.loc[self.X_validation_.index,:]
+        self.y_test = self.y_test.loc[self.X_test_.index, :]
+        '''
+        if self.plot_performance:
+            plt.figure(figsize=(15,5))
+            plt.scatter(range(len(X_train)), X_train['Vix'], c=X_train['Regime'], cmap='viridis', s=10)
+            plt.colorbar(label="Hidden state")
+            plt.title("VIX with Hidden Markov Model States Train")
+            plt.show()
+
+            plt.figure(figsize=(15,5))
+            plt.scatter(range(len(X_validation)), X_validation['Vix'], c=X_validation['Regime'], cmap='viridis', s=10)
+            plt.colorbar(label="Hidden state")
+            plt.title("VIX with Hidden Markov Model States Train")
+            plt.show()
+
+
 
 
 if __name__ == '__main__':
