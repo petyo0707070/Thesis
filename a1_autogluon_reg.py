@@ -8,6 +8,7 @@ from a1_precision_recall_threshold import precision_with_min_recall_scorer
 import pandas as pd
 import numpy as np
 import sys
+import matplotlib.pyplot as plt
 
 
 # ======================================================
@@ -15,10 +16,9 @@ import sys
 # ======================================================
 X = pd.read_csv('X_1.csv')
 y = pd.read_csv('y_1.csv')
-y['Profitable Trade'] = y['Bid Ask PNL'] >= 0.15
 
 Xy = X.copy()
-Xy['Profitable Trade'] = y['Profitable Trade'].values
+Xy['Realized Move Pct'] = y['Realized Move Pct'].values
 
 
 Xy_train = Xy[(Xy['Date'] >= '2014-01-01') & (Xy['Date'] <= '2020-12-31')][[col for col in Xy.columns if col != 'Date' and col != 'Q-String']].reset_index(drop = True)
@@ -27,7 +27,7 @@ Xy_test = Xy[(Xy['Date'] > '2022-12-31') & (Xy['Date'] <= '2024-12-31')][[col fo
 
 
 
-label = "Profitable Trade"   # <-- Replace with your label column
+label = "Realized Move Pct"   # <-- Replace with your label column
 
 # ======================================================
 # 3. HYPERPARAMETERS (DL tuning: LR + decay + focal loss)
@@ -64,7 +64,7 @@ hyperparameter_tune_kwargs = {
     "num_trials": 20,
     "scheduler": "local",
     "searcher": "random",
-    "time_out": 720
+    "time_out": 1080
 }
 
 # ======================================================
@@ -72,83 +72,73 @@ hyperparameter_tune_kwargs = {
 # ======================================================
 predictor = TabularPredictor(
     label=label,
-    problem_type="binary",
-    eval_metric= precision_with_min_recall_scorer # Can change to Precision, AUC, MCC or F1
+    problem_type="regression",
+    eval_metric= 'root_mean_squared_error' # Can change to Precision, AUC, MCC or F1
 ).fit(
     train_data=Xy_train,
     presets="best_quality_v150",
-    calibrate_decision_threshold=True,
     #hyperparameters=hyperparameters,
     hyperparameter_tune_kwargs=hyperparameter_tune_kwargs,
-    time_limit = 1440,
+    time_limit = 2160,
     full_weighted_ensemble_additionally = True,
     auto_stack = True,
-    num_stack_levels = 1,
+    num_stack_levels = 2,
     num_bag_sets = 1 # This is a last resource for improving predictive accuracy, increase models fit by num_bag_sets * num_bag_folds only of worse case scenario
 )
 
-'''
-# ======================================================
-# 6. THRESHOLD OPTIMIZATION — Precision + MCC ONLY
-# ======================================================
-best_thresh_precision = predictor.calibrate_decision_threshol(
-    test_data=Xy_validation, metric="precision"
-)
-best_thresh_mcc = predictor.calibrate_decision_threshol(
-    test_data=Xy_validation, metric="mcc"
-)
 
-print("Best Precision Threshold:", best_thresh_precision)
-print("Best MCC Threshold:", best_thresh_mcc)
-'''
+# ======================================================
+# 6. PREDICT ON VALIDATION
+# ======================================================
+preds_val = predictor.predict(Xy_validation)
 
 
 # ======================================================
-# 7. APPLY THRESHOLDS
+# 7. EVALUATE REGRESSION METRICS
 # ======================================================
-preds_val= predictor.predict(Xy_validation)
-
-# ======================================================
-# 8. EVALUATE — SHOW ALL METRICS
-# ======================================================
-eval_precision_all = predictor.evaluate_predictions(
+eval_metrics = predictor.evaluate_predictions(
     y_true=Xy_validation[label],
     y_pred=preds_val,
-    auxiliary_metrics=True
+    auxiliary_metrics=True   # shows RMSE, MAE, MAPE, R2, etc.
 )
 
+print("\n=== REGRESSION METRICS ===")
+print(eval_metrics)
 
-print("\n=== Precision-Optimized Threshold — ALL METRICS ===")
-print(eval_precision_all)
+
+
+plt.figure(figsize=(8,6))
+plt.scatter(Xy_validation[label], preds_val, alpha=0.6)
+plt.xlabel("Actual Realized Move Pct")
+plt.ylabel("Predicted Realized Move Pct")
+plt.title("Actual vs Predicted (Validation)")
+plt.grid(True)
+plt.show()
 
 
 # ======================================================
-# 9. FEATURE IMPORTANCE — NEW
+# 8. FEATURE IMPORTANCE
 # ======================================================
-print("\n=== Feature Importance ===")
+print("\n=== FEATURE IMPORTANCE ===")
 feature_importance_df = predictor.feature_importance(Xy_validation)
 print(feature_importance_df)
 
 
 # ======================================================
-# 10. LEADERBOARD (NEW)
+# 9. LEADERBOARD
 # ======================================================
 print("\n=== LEADERBOARD ===")
 print(predictor.leaderboard(silent=False))
 
+
 # ======================================================
-# 11. TRAINING SUMMARY (NEW)
+# 10. TRAINING SUMMARY
 # ======================================================
 print("\n=== TRAINING SUMMARY ===")
 predictor.fit_summary()
 
-# ======================================================
-# 12. SAVE MODEL
-# ======================================================
-predictor.save("autogluon_model/")
 
 # ======================================================
-# 13. LOAD LATER
+# 11. SAVE MODEL
 # ======================================================
-# predictor = TabularPredictor.load("autogluon_model/")
-
+predictor.save("autogluon_regressor/")

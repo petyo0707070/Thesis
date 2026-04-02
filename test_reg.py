@@ -1,5 +1,5 @@
 from autogluon.tabular import TabularDataset, TabularPredictor
-from sklearn.metrics import precision_score, matthews_corrcoef, recall_score
+from sklearn.metrics import root_mean_squared_error, mean_absolute_error, r2_score
 
 import plotly.express as px
 
@@ -17,9 +17,9 @@ y = pd.read_csv('y_1.csv')
 y['Profitable Trade'] = y['Bid Ask PNL'] >= 0.15
 
 Xy = X.copy()
-Xy['Profitable Trade'] = y['Profitable Trade'].values
+Xy['Realized Move Pct'] = y['Realized Move Pct'].values
 
-label = "Profitable Trade"   # <-- Replace with your label column
+label = "Realized Move Pct"   # <-- Replace with your label column
 
 
 Xy_train = Xy[(Xy['Date'] >= '2014-01-01') & (Xy['Date'] <= '2020-12-31')][[col for col in Xy.columns if col != 'Date' and col != 'Q-String']].reset_index(drop = True)
@@ -31,24 +31,28 @@ model_names = predictor.model_names() # Get model names
 y_true = Xy_validation[label]
 results = [] # This will store metrics we compute for performance evaluation
 
+
 for model in model_names:
-    preds_ = predictor.predict(Xy_validation, model=model)
-    precision = precision_score(y_true, preds_)
-    mcc = matthews_corrcoef(y_true, preds_)
-    recall = recall_score(y_true, preds_)
-    results.append((model, precision, mcc, recall))
+    preds_m = predictor.predict(Xy_validation, model=model)
+    
+    rmse = root_mean_squared_error(Xy_validation[label], preds_m, squared=False)
+    mae  = mean_absolute_error(Xy_validation[label], preds_m)
+    r2   = r2_score(Xy_validation[label], preds_m)
+    
+    results.append([model, rmse, mae, r2])
 
 
-df_metrics = pd.DataFrame(results, columns=["model", "precision", "mcc", "recall"])
+
+df_metrics = pd.DataFrame(results, columns=["model", "RSME", "MAE", "R2"])
 
 
 fig = px.scatter(
     df_metrics,
-    x="precision",
-    y="recall",
+    x="RMSE",
+    y="R2",
     color="model",
     hover_name="model",
-    title="Precision vs Recall by Model (Interactive)",
+    title="RMSE vs R2 by model (Interactive)",
     size_max=12
 )
 
@@ -56,8 +60,8 @@ fig.update_traces(marker=dict(size=14, line=dict(width=1, color="black")))
 fig.update_layout(
     width=900,
     height=700,
-    xaxis_title="Precision",
-    yaxis_title="Recall"
+    xaxis_title="RMSE",
+    yaxis_title="R2"
 )
 
 fig.show()
