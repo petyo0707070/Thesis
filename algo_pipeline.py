@@ -3,9 +3,17 @@ import numpy as np
 import pandas_ta as ta
 import pytz
 from datetime import time
+import matplotlib.pyplot as plt
+from sklearn.preprocessing import StandardScaler
+import tensorflow as tf
+
 
 class AlgoPipeline:
     def __init__(self):
+        pass
+
+    def calculate_features(self, name = 'btc_raw_features'):
+
         self.df = pd.read_excel(r"C:\Users\I'm the best\Documents\a\Algo Trading\btc_ohlc_15.xlsx")# Read data
         self.df['ticks'] = pd.to_datetime(self.df['ticks']).dt.tz_localize(None).dt.tz_localize('UTC')# Convert ticks to datetime
         self.df.rename(columns={'ticks': 'date'}, inplace=True)# Rename ticks to datetime
@@ -17,8 +25,6 @@ class AlgoPipeline:
             self.df['date'] = self.df['date'].dt.tz_localize('UTC')
         else:
             self.df['date'] = self.df['date'].dt.tz_convert('UTC')
-
-    def calculate_features(self, name = 'btc_raw_features'):
         self.df['log_return(1)'] = np.log(self.df['close'] / self.df['close'].shift(1))# Calculate log return
 
         # Volatility features
@@ -192,32 +198,219 @@ class AlgoPipeline:
         # Swing levels
         self.df[["dist_to_swing_high", "dist_to_swing_low"]] = compute_daily_swing_levels(self.df)
 
-        def session_overlaps():
-            df = self.df.copy()
-            # Time variables
-            def is_open(row_utc, timezone_str, open_time, close_time):
-                # Convert UTC time to local market time
-                local_time = row_utc.astimezone(pytz.timezone(timezone_str)).time()
-                return open_time <= local_time <= close_time
-            
-            markets = {'London': {'tz': 'Europe/London', 'open': time(7, 0), 'close': time(17, 00)}, 'NewYork': {'tz': 'America/New_York', 'open': time(8, 00), 'close': time(17, 0)},'Tokyo': {'tz': 'Asia/Tokyo', 'open': time(8, 0), 'close': time(19, 0)}}
-            for m, config in markets.items():
-                df[f'{m}_Open'] = df['date'].apply(lambda x: is_open(x, config['tz'], config['open'], config['close']))
-
-            is_weekday = df['date'].dt.dayofweek < 5
-
-            df['tokyo_london'] = (df['Tokyo_Open'] & df['London_Open']) & is_weekday
-            df['london_ny'] = (df['London_Open'] & df['NewYork_Open']) & is_weekday
-            df['tokyo_ny'] = (df['NewYork_Open'] & df['Tokyo_Open']) & is_weekday
-
-            return df[['tokyo_ny', 'london_ny', 'tokyo_london']]
 
         self.df['weekend'] = self.df['date'].dt.dayofweek >= 5# Add weekend indicator
-        self.df[['tokyo_ny', 'london_ny', 'tokyo_london']] = session_overlaps()# Add session overlap indicators
 
         self.df.to_csv(rf"C:\Users\I'm the best\Documents\a\Algo Trading\{name}.csv", index=False)
         print(self.df)
 
+    def fit(self, name = 'btc_raw_features', train_start = '2023-01-01', validation_start = '2025-01-01', test_start = '2026-01-01', atr_multiplyer = 3):
+        self.df = pd.read_csv(f'{name}.csv')
+        self.df.dropna(inplace = True)
+        self.df.reset_index(inplace = True, drop = True)
+        self.atr_multiplyer = atr_multiplyer
+
+        feature_cols = [c for c in list(self.df.columns) if c != 'open' and c != 'high' and c != 'low' and c != 'close' and c != 'volume' and c != 'date']
+
+        self.df['label'] = triple_barrier_labels(self.df, 24, self.atr_multiplyer)
+        print(self.df['label'].value_counts(True))
+
+        df_train = self.df[ (self.df['date'] >= train_start) & (self.df['date'] < validation_start)]
+        df_validation = self.df[ (self.df['date'] >= validation_start) & (self.df['date'] < test_start)]
+        df_validation = df_validation[96:]# 1 day embargo 
+
+        df_test = self.df[ (self.df['date'] >= test_start)]
+        df_test = df_test[96:] # 1 day embargo between validation and test
+
+        scaler = StandardScaler()
+        self.X_train = scaler.fit_transform(df_train[feature_cols])
+        self.X_validation = scaler.transform(df_validation[feature_cols])
+        self.X_test = scaler.fit_transform(df_test[feature_cols])
+      
+
+        self.y_train = self.df.loc[df_train.index, 'label']
+        self.y_validation = self.df.loc[df_validation.index, 'label']
+        self.y_test = self.df.loc[df_test.index, 'label']
+
+        train_sequence = make_dataset(self.X_train, self.y_train)
+        validation_sequence = make_dataset(self.X_validation, self.y_validation, shuffle = False)
+        test_sequence = make_dataset(self.X_test, self.y_test, shuffle = False)
+
+        encoder_model = build_xlstm_model(seq_len=32, n_features=X.shape[1])
+
+def triple_barrier_labels(df: pd.DataFrame,horizon: int = 24,atr_mult: float = 1.5,atr_col: str = "atr_14_normalized",close_col: str = "close") -> pd.Series:
+    """
+    Triple Barrier labeling (causal, per-bar).
+
+    Returns:
+        Series with labels in {-1, 0, +1}
+    """
+    close = df[close_col].values
+    atr   = (df[atr_col] * close).values  # de-normalize ATR
+    high  = df["high"].values
+    low   = df["low"].values
+
+    labels = np.zeros(len(df), dtype=int)
+
+    for i in range(len(df)):
+        if i + 1 >= len(df):
+            continue
+
+        upper = close[i] + atr_mult * atr[i]
+        lower = close[i] - atr_mult * atr[i]
+
+        end = min(i + horizon + 1, len(df))
+
+        for j in range(i + 1, end):
+            if high[j] >= upper:
+                labels[i] = 1
+                break
+            if low[j] <= lower:
+                labels[i] = -1
+                break
+        
+    labels = labels + 1
+        # else: stays 0 (expiry)
+
+    return labels
+
+
+def make_dataset(X, y, seq_len=32, batch_size=64, shuffle=True):
+    Xs, ys = [], []
+    for i in range(len(X) - seq_len + 1):
+        Xs.append(X[i:i + seq_len])
+        ys.append(y[i + seq_len - 1])
+
+    Xs = np.asarray(Xs, dtype=np.float32)
+    ys = np.asarray(ys, dtype=np.int32)
+
+    ds = tf.data.Dataset.from_tensor_slices((Xs, ys))
+    if shuffle:
+        ds = ds.shuffle(20_000)
+
+    return ds.batch(batch_size).prefetch(tf.data.AUTOTUNE)
+
+
+@tf.function
+def softcap(x, a=15.0):
+    return a * tf.tanh(x / a)
+
+
+class RMSNorm(tf.keras.layers.Layer):
+    def __init__(self, dim, eps=1e-8):
+        super().__init__()
+        self.eps = eps
+        self.scale = self.add_weight(
+            shape=(dim,),
+            initializer="ones",
+            trainable=True
+        )
+
+    def call(self, x):
+        rms = tf.sqrt(tf.reduce_mean(tf.square(x), axis=-1, keepdims=True) + self.eps)
+        return x / rms * self.scale
+
+
+
+class sLSTM(tf.keras.layers.Layer):
+    def __init__(self, dim, dropout=0.4):
+        super().__init__()
+        self.dim = dim
+        self.dropout = tf.keras.layers.Dropout(dropout)
+
+        self.linear = tf.keras.layers.Dense(3 * dim)
+        self.norm = RMSNorm(dim)
+
+        # Skeptical input gate
+        self.input_bias = self.add_weight(
+            shape=(dim,),
+            initializer=tf.keras.initializers.Constant(-10.0),
+            trainable=True
+        )
+
+    def call(self, x, training=False):
+        B = tf.shape(x)[0]
+        h = tf.zeros((B, self.dim))
+        m = tf.zeros((B, self.dim))
+
+        outputs = []
+
+        for t in range(x.shape[1]):
+            xt = x[:, t, :]
+            i_pre, f_pre, o = tf.split(self.linear(xt), 3, axis=-1)
+
+            i = tf.exp(softcap(i_pre + self.input_bias))
+            f = tf.exp(softcap(f_pre))
+
+            m = f * m + i * xt
+            h = o * m
+            h = self.norm(h)
+
+            outputs.append(h)
+
+        out = tf.stack(outputs, axis=1)
+        return self.dropout(out, training=training)
+
+
+class mLSTM(tf.keras.layers.Layer):
+    def __init__(self, dim, dropout=0.4):
+        super().__init__()
+        self.dim = dim
+        self.dropout = tf.keras.layers.Dropout(dropout)
+
+        self.q = tf.keras.layers.Dense(dim)
+        self.k = tf.keras.layers.Dense(dim)
+        self.v = tf.keras.layers.Dense(dim)
+        self.norm = RMSNorm(dim)
+
+    def call(self, x, training=False):
+        Q = self.q(x)
+        K = self.k(x)
+        V = self.v(x)
+
+        attn = tf.nn.softmax(
+            tf.matmul(Q, K, transpose_b=True) /
+            tf.sqrt(tf.cast(self.dim, tf.float32)),
+            axis=-1
+        )
+
+        out = tf.matmul(attn, V)
+        out = self.norm(out)
+        return self.dropout(out, training=training)
+
+
+
+def build_xlstm_model(seq_len=32, n_features=25, dim=128):
+    inputs = tf.keras.Input(shape=(seq_len, n_features))
+
+    x = tf.keras.layers.Dense(dim)(inputs)
+    x = sLSTM(dim)(x)
+    x = mLSTM(dim)(x)
+
+    x = x[:, -1, :]
+    x = RMSNorm(dim)(x)
+
+    outputs = tf.keras.layers.Dense(3)(x)
+    return tf.keras.Model(inputs, outputs)
+
+
+class FocalLoss(tf.keras.losses.Loss):
+    def __init__(self, gamma=2.0, alpha=(0.3, 0.4, 0.3)):
+        super().__init__()
+        self.gamma = gamma
+        self.alpha = tf.constant(alpha, dtype=tf.float32)
+
+    def call(self, y_true, y_pred):
+        y_true = tf.one_hot(y_true, 3)
+        y_pred = tf.nn.softmax(y_pred)
+
+        ce = -y_true * tf.math.log(y_pred + 1e-9)
+        fl = self.alpha * tf.pow(1.0 - y_pred, self.gamma) * ce
+        return tf.reduce_sum(fl, axis=-1)
+
+
+
 if __name__ == "__main__":
     pipeline = AlgoPipeline()
-    pipeline.calculate_features()
+    #pipeline.calculate_features()
+    pipeline.fit()
