@@ -8,6 +8,7 @@ from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
 
 
+
 class AlgoPipeline:
     def __init__(self):
         pass
@@ -204,7 +205,7 @@ class AlgoPipeline:
         self.df.to_csv(rf"C:\Users\I'm the best\Documents\a\Algo Trading\{name}.csv", index=False)
         print(self.df)
 
-    def fit(self, name = 'btc_raw_features', train_start = '2023-01-01', validation_start = '2025-01-01', test_start = '2026-01-01', atr_multiplyer = 3):
+    def fit(self, name = 'btc_raw_features', train_start = '2023-01-01', validation_start = '2025-06-01', test_start = '2026-01-01', atr_multiplyer = 3, load_encoder = False):
         self.df = pd.read_csv(f'{name}.csv')
         self.df.dropna(inplace = True)
         self.df.reset_index(inplace = True, drop = True)
@@ -216,6 +217,9 @@ class AlgoPipeline:
         print(self.df['label'].value_counts(True))
 
         df_train = self.df[ (self.df['date'] >= train_start) & (self.df['date'] < validation_start)]
+        df_train_train = df_train[0:int(0.8 * len(df_train))]
+        df_train_validation = df_train[int(0.8 * len(df_train)):][96:] # 1 Day embargo
+
         df_validation = self.df[ (self.df['date'] >= validation_start) & (self.df['date'] < test_start)]
         df_validation = df_validation[96:]# 1 day embargo 
 
@@ -223,20 +227,63 @@ class AlgoPipeline:
         df_test = df_test[96:] # 1 day embargo between validation and test
 
         scaler = StandardScaler()
-        self.X_train = scaler.fit_transform(df_train[feature_cols])
+        self.X_train_train = scaler.fit_transform(df_train_train[feature_cols])
+        self.X_train_validation = scaler.transform(df_train_validation[feature_cols])
         self.X_validation = scaler.transform(df_validation[feature_cols])
-        self.X_test = scaler.fit_transform(df_test[feature_cols])
+        self.X_test = scaler.transform(df_test[feature_cols])
       
 
-        self.y_train = self.df.loc[df_train.index, 'label']
+        self.y_train_train = self.df.loc[df_train_train.index, 'label']
+        self.y_train_validation = self.df.loc[df_train_validation.index, 'label']
         self.y_validation = self.df.loc[df_validation.index, 'label']
         self.y_test = self.df.loc[df_test.index, 'label']
 
-        train_sequence = make_dataset(self.X_train, self.y_train)
+        train_train_sequence = make_dataset(self.X_train_train, self.y_train_train)
+        train_validation_sequence = make_dataset(self.X_train_validation, self.y_train_validation, shuffle = False)
         validation_sequence = make_dataset(self.X_validation, self.y_validation, shuffle = False)
         test_sequence = make_dataset(self.X_test, self.y_test, shuffle = False)
 
-        encoder_model = build_xlstm_model(seq_len=32, n_features=X.shape[1])
+        # This triggers when the script is instructed to create its own encoder model and not to load a pre-trained one
+        if load_encoder == False:
+
+            encoder_model = build_xlstm_model(seq_len=32, n_features=self.X_train_train.shape[1])
+
+            encoder_model.compile( optimizer=tf.keras.optimizers.AdamW( learning_rate=3e-4,weight_decay=1e-4),loss=FocalLoss(gamma=2.0),metrics=["sparse_categorical_accuracy"])
+
+            encoder_model.summary()
+            encoder_model.fit(train_train_sequence, epochs=30, validation_data=train_validation_sequence)
+            
+            for layer in encoder_model.layers:
+                layer.trainable = False
+
+            # After the encoder model is trained we save it for future use
+            encoder_model.save("encoder_model.keras")
+        
+        else:
+            # Define the custom objects that the model uses to be compiled because that will be needed when we load it back up
+            
+            custom_objects = {"sLSTM": sLSTM, "mLSTM": mLSTM, "RMSNorm": RMSNorm, "FocalLoss": FocalLoss, "softcap": softcap,}
+
+            encoder_model = tf.keras.models.load_model("encoder_model.keras", custom_objects=custom_objects,
+                compile=False)  # ✅ IMPORTANT according to article
+
+        
+        embedding_model = tf.keras.Model(inputs=encoder_model.input, outputs=encoder_model.layers[-2].output)  # Create an embedding model which will use the aforefitted Neural Net to extract a 128 dimensional representation of the market from its RMS layer
+        
+        # Extract the 128 dimensional embeddings that will be used to be feaf into the RL model
+        Z_train_train = embedding_model.predict(train_train_sequence)
+        Z_train_validation = embedding_model.predict(train_validation_sequence)
+        Z_validation   = embedding_model.predict(validation_sequence)
+        Z_test  = embedding_model.predict(test_sequence)
+
+        # Check to see that there is no zero variance in the embeddings ALSO CHECK THEIR ACCURACY IT SHOULD NOT BE THE BASELINE        
+        print(np.mean(Z_train_train, axis=0))
+        print(np.std(Z_train_train, axis=0))
+
+        print(np.mean(Z_validation, axis=0))
+        print(np.std(Z_validation, axis=0))
+
+
 
 def triple_barrier_labels(df: pd.DataFrame,horizon: int = 24,atr_mult: float = 1.5,atr_col: str = "atr_14_normalized",close_col: str = "close") -> pd.Series:
     """
@@ -279,7 +326,7 @@ def make_dataset(X, y, seq_len=32, batch_size=64, shuffle=True):
     Xs, ys = [], []
     for i in range(len(X) - seq_len + 1):
         Xs.append(X[i:i + seq_len])
-        ys.append(y[i + seq_len - 1])
+        ys.append(y.iloc[i + seq_len - 1])
 
     Xs = np.asarray(Xs, dtype=np.float32)
     ys = np.asarray(ys, dtype=np.int32)
@@ -340,7 +387,7 @@ class sLSTM(tf.keras.layers.Layer):
             i_pre, f_pre, o = tf.split(self.linear(xt), 3, axis=-1)
 
             i = tf.exp(softcap(i_pre + self.input_bias))
-            f = tf.exp(softcap(f_pre))
+            f = tf.exp(-tf.nn.softplus(f_pre))
 
             m = f * m + i * xt
             h = o * m
@@ -352,30 +399,70 @@ class sLSTM(tf.keras.layers.Layer):
         return self.dropout(out, training=training)
 
 
+
 class mLSTM(tf.keras.layers.Layer):
     def __init__(self, dim, dropout=0.4):
         super().__init__()
         self.dim = dim
         self.dropout = tf.keras.layers.Dropout(dropout)
 
-        self.q = tf.keras.layers.Dense(dim)
-        self.k = tf.keras.layers.Dense(dim)
-        self.v = tf.keras.layers.Dense(dim)
+        # Projections
+        self.q_proj = tf.keras.layers.Dense(dim)
+        self.k_proj = tf.keras.layers.Dense(dim)
+        self.v_proj = tf.keras.layers.Dense(dim)
+
+        # Gates
+        self.gate_proj = tf.keras.layers.Dense(3 * dim)
+
         self.norm = RMSNorm(dim)
 
-    def call(self, x, training=False):
-        Q = self.q(x)
-        K = self.k(x)
-        V = self.v(x)
-
-        attn = tf.nn.softmax(
-            tf.matmul(Q, K, transpose_b=True) /
-            tf.sqrt(tf.cast(self.dim, tf.float32)),
-            axis=-1
+        # Skeptical input gate bias (same philosophy as sLSTM)
+        self.input_bias = self.add_weight(
+            shape=(dim,),
+            initializer=tf.keras.initializers.Constant(-5.0),
+            trainable=True
         )
 
-        out = tf.matmul(attn, V)
-        out = self.norm(out)
+    def call(self, x, training=False):
+        """
+        x: (B, T, D)
+        """
+        B = tf.shape(x)[0]
+        D = self.dim
+
+        # Persistent matrix memory
+        M = tf.zeros((B, D, D))
+
+        outputs = []
+
+        for t in range(x.shape[1]):
+            xt = x[:, t, :]
+
+            q = self.q_proj(xt)   # (B, D)
+            k = self.k_proj(xt)
+            v = self.v_proj(xt)
+
+            i_pre, f_pre, o = tf.split(self.gate_proj(xt), 3, axis=-1)
+
+            # Exponential gates with softcap
+            i = tf.exp(softcap(i_pre + self.input_bias))
+            f = tf.exp(-tf.nn.softplus(f_pre))
+
+            # Outer product update: v ⊗ k
+            vkT = tf.einsum("bi,bj->bij", v, k)
+
+            # Matrix memory update
+            M = f[:, :, None] * M + i[:, :, None] * vkT
+
+            # Read from memory: M @ q
+            h = tf.einsum("bij,bj->bi", M, q)
+
+            h = o * h
+            h = self.norm(h)
+
+            outputs.append(h)
+
+        out = tf.stack(outputs, axis=1)
         return self.dropout(out, training=training)
 
 
@@ -394,19 +481,33 @@ def build_xlstm_model(seq_len=32, n_features=25, dim=128):
     return tf.keras.Model(inputs, outputs)
 
 
+
 class FocalLoss(tf.keras.losses.Loss):
     def __init__(self, gamma=2.0, alpha=(0.3, 0.4, 0.3)):
         super().__init__()
         self.gamma = gamma
         self.alpha = tf.constant(alpha, dtype=tf.float32)
 
-    def call(self, y_true, y_pred):
-        y_true = tf.one_hot(y_true, 3)
-        y_pred = tf.nn.softmax(y_pred)
+    def call(self, y_true, logits):
+        #logits = tf.clip_by_value(logits, -20.0, 20.0)
+        # Ensure integer labels
+        y_true = tf.cast(y_true, tf.int32)
 
-        ce = -y_true * tf.math.log(y_pred + 1e-9)
-        fl = self.alpha * tf.pow(1.0 - y_pred, self.gamma) * ce
-        return tf.reduce_sum(fl, axis=-1)
+        # One-hot
+        y_true_oh = tf.one_hot(y_true, depth=3)
+
+        # ✅ LOG-SOFTMAX (stable)
+        log_probs = tf.nn.log_softmax(logits, axis=-1)
+        probs = tf.exp(log_probs)
+
+        # Cross-entropy
+        ce = -y_true_oh * log_probs
+
+        # Focal scaling
+        focal = self.alpha * tf.pow(1.0 - probs, self.gamma) * ce
+
+        return tf.reduce_sum(focal, axis=-1)
+
 
 
 
