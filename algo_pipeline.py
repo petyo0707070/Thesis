@@ -6,7 +6,11 @@ from datetime import time
 import matplotlib.pyplot as plt
 from sklearn.preprocessing import StandardScaler
 import tensorflow as tf
-
+from sklearn.metrics import accuracy_score, recall_score, precision_score
+import gymnasium as gym
+from gymnasium import spaces
+from stable_baselines3 import PPO
+import matplotlib.pyplot as plt
 
 
 class AlgoPipeline:
@@ -205,16 +209,19 @@ class AlgoPipeline:
         self.df.to_csv(rf"C:\Users\I'm the best\Documents\a\Algo Trading\{name}.csv", index=False)
         print(self.df)
 
-    def fit(self, name = 'btc_raw_features', train_start = '2023-01-01', validation_start = '2025-06-01', test_start = '2026-01-01', atr_multiplyer = 3, load_encoder = False):
+    def fit(self, name = 'btc_raw_features', train_start = '2023-01-01', validation_start = '2025-06-01', test_start = '2026-01-01', atr_multiplyer = 3, load_encoder = False, sequence_length = 32):
         self.df = pd.read_csv(f'{name}.csv')
         self.df.dropna(inplace = True)
         self.df.reset_index(inplace = True, drop = True)
         self.atr_multiplyer = atr_multiplyer
 
+
         feature_cols = [c for c in list(self.df.columns) if c != 'open' and c != 'high' and c != 'low' and c != 'close' and c != 'volume' and c != 'date']
 
+        self.df["vol_96"] = (self.df["log_return(1)"].rolling(96).std())
+
         self.df['label'] = triple_barrier_labels(self.df, 24, self.atr_multiplyer)
-        print(self.df['label'].value_counts(True))
+        #print(self.df['label'].value_counts(True))
 
         df_train = self.df[ (self.df['date'] >= train_start) & (self.df['date'] < validation_start)]
         df_train_train = df_train[0:int(0.8 * len(df_train))]
@@ -225,6 +232,17 @@ class AlgoPipeline:
 
         df_test = self.df[ (self.df['date'] >= test_start)]
         df_test = df_test[96:] # 1 day embargo between validation and test
+
+        vol_train = self.df.loc[df_train_train.index, "vol_96"].values
+        vol_train = vol_train[sequence_length - 1:]        
+        vol_rank = (pd.Series(vol_train).rank(pct=True).values)
+
+        
+        stage_1_mask = vol_rank <= 0.20   # calmest 10%
+        stage_2_mask = vol_rank <= 0.60   # calmest 50%
+        stage_3_mask = np.ones_like(vol_rank, dtype=bool)
+
+
 
         scaler = StandardScaler()
         self.X_train_train = scaler.fit_transform(df_train_train[feature_cols])
@@ -237,21 +255,20 @@ class AlgoPipeline:
         self.y_train_validation = self.df.loc[df_train_validation.index, 'label']
         self.y_validation = self.df.loc[df_validation.index, 'label']
         self.y_test = self.df.loc[df_test.index, 'label']
-
-        train_train_sequence = make_dataset(self.X_train_train, self.y_train_train)
-        train_validation_sequence = make_dataset(self.X_train_validation, self.y_train_validation, shuffle = False)
-        validation_sequence = make_dataset(self.X_validation, self.y_validation, shuffle = False)
+        train_train_sequence = make_dataset(self.X_train_train, self.y_train_train, seq_len= sequence_length)
+        train_validation_sequence = make_dataset(self.X_train_validation, self.y_train_validation, shuffle = False, seq_len= sequence_length)
+        validation_sequence = make_dataset(self.X_validation, self.y_validation, shuffle = False, seq_len= sequence_length)
         test_sequence = make_dataset(self.X_test, self.y_test, shuffle = False)
 
         # This triggers when the script is instructed to create its own encoder model and not to load a pre-trained one
         if load_encoder == False:
 
-            encoder_model = build_xlstm_model(seq_len=32, n_features=self.X_train_train.shape[1])
+            encoder_model = build_xlstm_model(seq_len=sequence_length, n_features=self.X_train_train.shape[1])
 
             encoder_model.compile( optimizer=tf.keras.optimizers.AdamW( learning_rate=3e-4,weight_decay=1e-4),loss=FocalLoss(gamma=2.0),metrics=["sparse_categorical_accuracy"])
 
             encoder_model.summary()
-            encoder_model.fit(train_train_sequence, epochs=30, validation_data=train_validation_sequence)
+            encoder_model.fit(train_train_sequence, epochs=12, validation_data=train_validation_sequence)
             
             for layer in encoder_model.layers:
                 layer.trainable = False
@@ -268,6 +285,13 @@ class AlgoPipeline:
                 compile=False)  # ✅ IMPORTANT according to article
 
         
+
+        
+        y_val_seq = np.array([y for _, y in validation_sequence.unbatch()])
+
+        #y_pred = np.argmax(encoder_model.predict(validation_sequence), axis=1)
+        #accuracy_val, precision_val, recall_val = accuracy_score(y_val_seq, y_pred), precision_score(y_val_seq, y_pred, average = None), recall_score(y_val_seq, y_pred, average = None) 
+
         embedding_model = tf.keras.Model(inputs=encoder_model.input, outputs=encoder_model.layers[-2].output)  # Create an embedding model which will use the aforefitted Neural Net to extract a 128 dimensional representation of the market from its RMS layer
         
         # Extract the 128 dimensional embeddings that will be used to be feaf into the RL model
@@ -276,12 +300,110 @@ class AlgoPipeline:
         Z_validation   = embedding_model.predict(validation_sequence)
         Z_test  = embedding_model.predict(test_sequence)
 
-        # Check to see that there is no zero variance in the embeddings ALSO CHECK THEIR ACCURACY IT SHOULD NOT BE THE BASELINE        
-        print(np.mean(Z_train_train, axis=0))
-        print(np.std(Z_train_train, axis=0))
+        
+        close_train = self.df.loc[df_train_train.index, "close"].values[sequence_length - 1:]
+        high_train  = self.df.loc[df_train_train.index, "high"].values[sequence_length - 1:]
+        low_train   = self.df.loc[df_train_train.index, "low"].values[sequence_length - 1:]
+        atr_train   = (self.df.loc[df_train_train.index, "atr_14_normalized"].values *self.df.loc[df_train_train.index, "close"].values)[sequence_length - 1:]
 
-        print(np.mean(Z_validation, axis=0))
-        print(np.std(Z_validation, axis=0))
+
+        model = None
+        policy_kwargs = dict(net_arch=[128, 128])
+
+        
+        stages = [
+            ("stage_1", stage_1_mask),
+            ("stage_2", stage_2_mask),
+            ("stage_3", stage_3_mask),
+        ]
+
+        
+        for i, (name, mask) in enumerate(stages):
+            print(f"\n=== Training {name} ===")
+
+            env = TripleBarrierTradingEnv( Z=Z_train_train[mask], close=close_train[mask], high = high_train[mask], low = low_train[mask], atr = atr_train[mask])
+
+            if model is None:
+                model = PPO( "MlpPolicy", env, learning_rate=cosine_lr_schedule(3e-4, 1e-5), clip_range=linear_clip_schedule(0.2, 0.1), gamma=0.99, ent_coef=0.01, n_steps=2048, batch_size=64, policy_kwargs=policy_kwargs,verbose=1)
+            else:
+                model.set_env(env)
+
+            model.learn(total_timesteps=500_000)
+
+        
+        model = PPO.save("ppo_triple_barrier")
+
+        '''
+            
+        model = PPO.load("ppo_triple_barrier",
+            env=env_eval,   # validation / test / live env
+            device="auto"
+        )
+
+        '''
+
+        # This is how you extract the results from the training set
+        env_train_evaluation = TripleBarrierTradingEnv(Z = Z_train_train, close= close_train, high  =high_train, low = low_train, atr= atr_train)      
+        train_rewards, train_equity = rollout_policy(model, env_train_evaluation)
+        train_sharpe = sharpe_ratio(train_rewards)
+
+        
+        print("TRAIN PERFORMANCE")
+        print("-----------------")
+        print(f"Total PnL     : {train_equity[-1]:.3f}")
+        print(f"Sharpe Ratio  : {train_sharpe:.3f}")
+        print(f"Steps         : {len(train_rewards)}")
+
+
+        plt.figure(figsize=(12, 4))
+        plt.plot(train_equity)
+        plt.title("Training Equity Curve")
+        plt.xlabel("Steps")
+        plt.ylabel("Cumulative Reward")
+        plt.grid(True)
+        plt.show()
+
+
+        # This is how to extract the results for the train_validaiton set
+        close_train_val = self.df.loc[df_train_validation.index, "close"].values[sequence_length - 1:]
+        high_train_val  = self.df.loc[df_train_validation.index, "high"].values[sequence_length - 1:]
+        low_train_val   = self.df.loc[df_train_validation.index, "low"].values[sequence_length - 1:]
+        atr_train_val   = (self.df.loc[df_train_validation.index, "atr_14_normalized"].values *self.df.loc[df_train_validation.index, "close"].values)[sequence_length - 1:]
+
+        
+        env_train_validation_evaluation = TripleBarrierTradingEnv( Z=Z_train_validation, close=close_train_val, high=high_train_val, low=low_train_val, atr=atr_train_val)
+        train_validation_rewards, train_validation_equity = rollout_policy(model, env_train_validation_evaluation)
+        train_validation_sharpe = sharpe_ratio(train_validation_rewards)
+
+        
+        print("\n TRAIN VALIDATION PERFORMANCE")
+        print("--------------------")
+        print(f"Total PnL     : {train_validation_equity[-1]:.3f}")
+        print(f"Sharpe Ratio  : {train_validation_sharpe:.3f}")
+        print(f"Steps         : {len(train_validation_rewards)}")
+
+        plt.figure(figsize=(12, 4))
+        plt.plot(train_validation_equity)
+        plt.title("Train Validation Equity Curve")
+        plt.xlabel("Steps")
+        plt.ylabel("Cumulative Reward")
+        plt.grid(True)
+        plt.show()
+
+
+        
+        trade_rewards_train = train_rewards[np.abs(train_rewards) >= 1.0]
+        trade_rewards_train_validation   = train_validation_rewards[np.abs(train_validation_rewards) >= 1.0]
+
+        print("\nTRAIN TRADES")
+        print("-----------")
+        print("Trades  :", len(trade_rewards_train))
+        print("Win rate:", np.mean(trade_rewards_train > 0))
+
+        print("\nVAL TRADES")
+        print("---------")
+        print("Trades  :", len(trade_rewards_train_validation))
+        print("Win rate:", np.mean(trade_rewards_train_validation > 0))
 
 
 
@@ -344,8 +466,8 @@ def softcap(x, a=15.0):
 
 
 class RMSNorm(tf.keras.layers.Layer):
-    def __init__(self, dim, eps=1e-8):
-        super().__init__()
+    def __init__(self, dim, eps=1e-8, **kwargs):
+        super().__init__(**kwargs)
         self.eps = eps
         self.scale = self.add_weight(
             shape=(dim,),
@@ -360,8 +482,8 @@ class RMSNorm(tf.keras.layers.Layer):
 
 
 class sLSTM(tf.keras.layers.Layer):
-    def __init__(self, dim, dropout=0.4):
-        super().__init__()
+    def __init__(self, dim, dropout=0.4, **kwargs):
+        super().__init__(**kwargs)
         self.dim = dim
         self.dropout = tf.keras.layers.Dropout(dropout)
 
@@ -401,8 +523,8 @@ class sLSTM(tf.keras.layers.Layer):
 
 
 class mLSTM(tf.keras.layers.Layer):
-    def __init__(self, dim, dropout=0.4):
-        super().__init__()
+    def __init__(self, dim, dropout=0.4, **kwargs):
+        super().__init__(**kwargs)
         self.dim = dim
         self.dropout = tf.keras.layers.Dropout(dropout)
 
@@ -478,7 +600,7 @@ def build_xlstm_model(seq_len=32, n_features=25, dim=128):
     x = RMSNorm(dim)(x)
 
     outputs = tf.keras.layers.Dense(3)(x)
-    return tf.keras.Model(inputs, outputs)
+    return tf.keras.Model(inputs, outputs)  
 
 
 
@@ -511,7 +633,150 @@ class FocalLoss(tf.keras.losses.Loss):
 
 
 
+
+
+class TripleBarrierTradingEnv(gym.Env):
+    def __init__(self, Z, close, high, low, atr, max_holding=60, spread_cost=0.05, tp_sl_mult = 3.0):
+        super().__init__()
+
+        self.Z = Z.astype(np.float32)
+        self.close = close
+        self.high = high
+        self.low = low
+        self.atr = atr
+
+        self.tp_sl_mult = tp_sl_mult
+
+        self.max_holding = max_holding
+        self.spread_cost = spread_cost
+
+        self.action_space = spaces.Discrete(3)
+        self.observation_space = spaces.Box(low=-np.inf,high=np.inf,shape=(Z.shape[1],),dtype=np.float32)
+
+    def reset(self, *, seed=None, options=None):
+        super().reset(seed=seed)
+
+        self.t = 0
+        self.position = 0
+        self.entry_price = None
+        self.tp = None
+        self.sl = None
+        self.holding_time = 0
+
+        obs = self.Z[self.t]
+        info = {}
+
+        return obs, info
+
+    def step(self, action):
+        reward = 0.0
+
+        # ENTRY LOGIC
+        if self.position == 0:
+            if action == 1:
+                self.position = 1
+            elif action == 2:
+                self.position = -1
+
+            if self.position != 0:
+                self.entry_price = self.close[self.t]
+                atr = self.atr[self.t]
+
+                if self.position == 1:
+                    self.tp = self.entry_price + self.tp_sl_mult * atr
+                    self.sl = self.entry_price - 1.0 * atr
+                else:
+                    self.tp = self.entry_price - self.tp_sl_mult * atr
+                    self.sl = self.entry_price + 1.0 * atr
+
+                reward -= self.spread_cost
+                self.holding_time = 0
+
+        # POSITION MANAGEMENT
+        else:
+            self.holding_time += 1
+
+            if self.position == 1:
+                if self.high[self.t] >= self.tp:
+                    reward += self.tp_sl_mult
+                    self.position = 0
+                elif self.low[self.t] <= self.sl:
+                    reward -= 1.0
+                    self.position = 0
+
+            elif self.position == -1:
+                if self.low[self.t] <= self.tp:
+                    reward += self.tp_sl_mult
+                    self.position = 0
+                elif self.high[self.t] >= self.sl:
+                    reward -= 1.0
+                    self.position = 0
+
+            # TIME EXPIRY
+            if self.position != 0 and self.holding_time >= self.max_holding:
+                pnl = (self.close[self.t] - self.entry_price) / self.atr[self.t]
+                reward += pnl * self.position
+                self.position = 0
+
+        self.t += 1
+
+        terminated = self.t >= len(self.Z) - 1
+        truncated = False
+
+        obs = self.Z[self.t]
+        info = {}
+
+        return obs, reward, terminated, truncated, info
+
+
+def cosine_lr_schedule(initial_lr, final_lr):
+    def schedule(progress):
+        return final_lr + 0.5 * (initial_lr - final_lr) * (1 + np.cos(np.pi * progress))
+    return schedule
+
+def linear_clip_schedule(start, end):
+    def schedule(progress):
+        return end + (start - end) * progress
+    return schedule
+
+
+
+def rollout_policy(model, env):
+    """
+    Roll out a trained SB3 policy on a Gymnasium environment.
+    Returns per-step rewards and the equity curve.
+    """
+
+    rewards = []
+    equity_curve = []
+
+    obs, info = env.reset()
+    terminated = False
+    truncated = False
+
+    cumulative_pnl = 0.0
+
+    while not (terminated or truncated):
+        action, _ = model.predict(obs, deterministic=True)
+
+        obs, reward, terminated, truncated, info = env.step(action)
+
+        rewards.append(reward)
+        cumulative_pnl += reward
+        equity_curve.append(cumulative_pnl)
+
+    return np.array(rewards), np.array(equity_curve)
+
+
+def sharpe_ratio(returns, eps=1e-8):
+    mean_ret = returns.mean()
+    std_ret = returns.std() + eps
+    ann_factor = np.sqrt(96 * 365)
+    return mean_ret / std_ret * ann_factor
+
+
+
 if __name__ == "__main__":
     pipeline = AlgoPipeline()
     #pipeline.calculate_features()
-    pipeline.fit()
+    pipeline.fit(load_encoder= True)
