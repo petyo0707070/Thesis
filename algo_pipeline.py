@@ -10,6 +10,17 @@ import gymnasium as gym
 from gymnasium import spaces
 from stable_baselines3 import PPO
 import matplotlib.pyplot as plt
+import random
+import torch
+
+
+SEED = 42
+
+random.seed(SEED)
+np.random.seed(SEED)
+torch.manual_seed(SEED)
+tf.random.set_seed(SEED)
+tf.config.experimental.enable_op_determinism()
 
 
 class AlgoPipeline:
@@ -208,9 +219,8 @@ class AlgoPipeline:
         self.df.to_csv(rf"C:\Users\I'm the best\Documents\a\Algo Trading\{name}.csv", index=False)
         print(self.df)
 
-    def fit(self, name = 'btc_raw_features', train_start = '2023-01-01', validation_start = '2025-06-01', test_start = '2026-01-01', atr_multiplyer = 3, load_encoder = False, sequence_length = 32):
-        self.df = pd.read_csv('/home/petar/algo_trading/btc_raw_features.csv')
-        # self.df = pd.read_csv(f'{name}.csv')
+    def fit(self, name = 'btc_raw_features', train_start = '2023-01-01', validation_start = '2025-06-01', test_start = '2026-01-01', atr_multiplyer = 3, load_encoder = False, load_model = False, sequence_length = 32, batch_size = 256):
+        self.df = pd.read_csv(f'{name}.csv')
         self.df.dropna(inplace = True)
         self.df.reset_index(inplace = True, drop = True)
         self.atr_multiplyer = atr_multiplyer
@@ -255,10 +265,10 @@ class AlgoPipeline:
         self.y_train_validation = self.df.loc[df_train_validation.index, 'label']
         self.y_validation = self.df.loc[df_validation.index, 'label']
         self.y_test = self.df.loc[df_test.index, 'label']
-        train_train_sequence = make_dataset(self.X_train_train, self.y_train_train, seq_len= sequence_length)
-        train_validation_sequence = make_dataset(self.X_train_validation, self.y_train_validation, shuffle = False, seq_len= sequence_length)
-        validation_sequence = make_dataset(self.X_validation, self.y_validation, shuffle = False, seq_len= sequence_length)
-        test_sequence = make_dataset(self.X_test, self.y_test, shuffle = False)
+        train_train_sequence = make_dataset(self.X_train_train, self.y_train_train, seq_len= sequence_length, batch_size= batch_size)
+        train_validation_sequence = make_dataset(self.X_train_validation, self.y_train_validation, shuffle = False, seq_len= sequence_length, batch_size= batch_size)
+        validation_sequence = make_dataset(self.X_validation, self.y_validation, shuffle = False, seq_len= sequence_length, batch_size= batch_size)
+        test_sequence = make_dataset(self.X_test, self.y_test, shuffle = False, batch_size= batch_size)
 
         # This triggers when the script is instructed to create its own encoder model and not to load a pre-trained one
         if load_encoder == False:
@@ -282,8 +292,7 @@ class AlgoPipeline:
             
             custom_objects = {"sLSTM": sLSTM, "mLSTM": mLSTM, "RMSNorm": RMSNorm, "FocalLoss": FocalLoss, "softcap": softcap,}
 
-            encoder_model = tf.keras.models.load_model("encoder_model.keras", custom_objects=custom_objects,
-                compile=False)  # ✅ IMPORTANT according to article
+            encoder_model = tf.keras.models.load_model("encoder_model.keras", custom_objects=custom_objects,compile=False, safe_mode=False)  # ✅ IMPORTANT according to article
 
         
 
@@ -293,7 +302,8 @@ class AlgoPipeline:
         #y_pred = np.argmax(encoder_model.predict(validation_sequence), axis=1)
         #accuracy_val, precision_val, recall_val = accuracy_score(y_val_seq, y_pred), precision_score(y_val_seq, y_pred, average = None), recall_score(y_val_seq, y_pred, average = None) 
 
-        embedding_model = tf.keras.Model(inputs=encoder_model.input, outputs=encoder_model.layers[-2].output)  # Create an embedding model which will use the aforefitted Neural Net to extract a 128 dimensional representation of the market from its RMS layer
+        
+        embedding_model = tf.keras.Model(inputs=encoder_model.input, outputs=encoder_model.get_layer("embedding").output) # Create an embedding model which will use the aforefitted Neural Net to extract a 128 dimensional representation of the market from its RMS layer
         
         # Extract the 128 dimensional embeddings that will be used to be feaf into the RL model
         Z_train_train = embedding_model.predict(train_train_sequence)
@@ -311,40 +321,50 @@ class AlgoPipeline:
         model = None
         policy_kwargs = dict(net_arch=[128, 128])
 
-        
-        stages = [
-            ("stage_1", stage_1_mask),
-            ("stage_2", stage_2_mask),
-            ("stage_3", stage_3_mask),
-        ]
+        if load_model == False:
+            stages = [
+                ("stage_1", stage_1_mask),
+                ("stage_2", stage_2_mask),
+                ("stage_3", stage_3_mask),
+            ]
 
-        
-        for i, (name, mask) in enumerate(stages):
-            print(f"\n=== Training {name} ===")
-
-            env = TripleBarrierTradingEnv( Z=Z_train_train[mask], close=close_train[mask], high = high_train[mask], low = low_train[mask], atr = atr_train[mask])
-
-            if model is None:
-                model = PPO( "MlpPolicy", env, learning_rate=cosine_lr_schedule(3e-4, 1e-5), clip_range=linear_clip_schedule(0.2, 0.1), gamma=0.99, ent_coef=0.01, n_steps=2048, batch_size=64, policy_kwargs=policy_kwargs,verbose=1)
-            else:
-                model.set_env(env)
-
-            model.learn(total_timesteps=500_000)
-
-        
-        model = PPO.save("ppo_triple_barrier")
-
-        '''
             
-        model = PPO.load("ppo_triple_barrier",
-            env=env_eval,   # validation / test / live env
-            device="auto"
-        )
+            for i, (name, mask) in enumerate(stages):
+                print(f"\n=== Training {name} ===")
 
-        '''
+                env = TripleBarrierTradingEnv( Z=Z_train_train[mask], close=close_train[mask], high = high_train[mask], low = low_train[mask], atr = atr_train[mask])
+
+                if model is None:
+                    model = PPO( "MlpPolicy", env, learning_rate=cosine_lr_schedule(3e-4, 1e-5), clip_range=linear_clip_schedule(0.2, 0.1), gamma=0.99, ent_coef=0.01, n_steps=2048, batch_size=256, policy_kwargs=policy_kwargs,verbose=1)
+                else:
+                    model.set_env(env)
+
+                model.learn(total_timesteps=500_000)
+
+            
+            model.save("ppo_triple_barrier")
+
+        env_train_evaluation = TripleBarrierTradingEnv(Z = Z_train_train, close= close_train, high  =high_train, low = low_train, atr= atr_train)
+
+        close_train_val = self.df.loc[df_train_validation.index, "close"].values[sequence_length - 1:]
+        high_train_val  = self.df.loc[df_train_validation.index, "high"].values[sequence_length - 1:]
+        low_train_val   = self.df.loc[df_train_validation.index, "low"].values[sequence_length - 1:]
+        atr_train_val   = (self.df.loc[df_train_validation.index, "atr_14_normalized"].values *self.df.loc[df_train_validation.index, "close"].values)[sequence_length - 1:]
+        env_train_validation_evaluation = TripleBarrierTradingEnv( Z=Z_train_validation, close=close_train_val, high=high_train_val, low=low_train_val, atr=atr_train_val)
+
+        close_val = self.df.loc[df_validation.index, "close"].values[sequence_length - 1:]
+        high_val  = self.df.loc[df_validation.index, "high"].values[sequence_length - 1:]
+        low_val   = self.df.loc[df_validation.index, "low"].values[sequence_length - 1:]
+        atr_val   = (self.df.loc[df_validation.index, "atr_14_normalized"].values *self.df.loc[df_validation.index, "close"].values)[sequence_length - 1:]     
+        env_validation_evaluation = TripleBarrierTradingEnv(Z = Z_validation, close = close_val, high = high_val, low = low_val, atr = atr_val)
+
+        if load_model == True:
+            model = PPO.load("ppo_triple_barrier",
+                device="auto")
+
+        model.policy.set_training_mode(False)
 
         # This is how you extract the results from the training set
-        env_train_evaluation = TripleBarrierTradingEnv(Z = Z_train_train, close= close_train, high  =high_train, low = low_train, atr= atr_train)      
         train_rewards, train_equity = rollout_policy(model, env_train_evaluation)
         train_sharpe = sharpe_ratio(train_rewards)
 
@@ -366,13 +386,6 @@ class AlgoPipeline:
 
 
         # This is how to extract the results for the train_validaiton set
-        close_train_val = self.df.loc[df_train_validation.index, "close"].values[sequence_length - 1:]
-        high_train_val  = self.df.loc[df_train_validation.index, "high"].values[sequence_length - 1:]
-        low_train_val   = self.df.loc[df_train_validation.index, "low"].values[sequence_length - 1:]
-        atr_train_val   = (self.df.loc[df_train_validation.index, "atr_14_normalized"].values *self.df.loc[df_train_validation.index, "close"].values)[sequence_length - 1:]
-
-        
-        env_train_validation_evaluation = TripleBarrierTradingEnv( Z=Z_train_validation, close=close_train_val, high=high_train_val, low=low_train_val, atr=atr_train_val)
         train_validation_rewards, train_validation_equity = rollout_policy(model, env_train_validation_evaluation)
         train_validation_sharpe = sharpe_ratio(train_validation_rewards)
 
@@ -392,19 +405,47 @@ class AlgoPipeline:
         plt.show()
 
 
+
+        # This is how to extract the results for the validation set
+        validation_rewards, validation_equity = rollout_policy(model, env_validation_evaluation)
+        validation_sharpe = sharpe_ratio(validation_rewards)
+
+        
+        print("\n VALIDATION PERFORMANCE")
+        print("--------------------")
+        print(f"Total PnL     : {validation_equity[-1]:.3f}")
+        print(f"Sharpe Ratio  : {validation_sharpe:.3f}")
+        print(f"Steps         : {len(validation_rewards)}")
+
+        plt.figure(figsize=(12, 4))
+        plt.plot(validation_equity)
+        plt.title("Train Validation Equity Curve")
+        plt.xlabel("Steps")
+        plt.ylabel("Cumulative Reward")
+        plt.grid(True)
+        plt.show()
+
+
         
         trade_rewards_train = train_rewards[np.abs(train_rewards) >= 1.0]
         trade_rewards_train_validation   = train_validation_rewards[np.abs(train_validation_rewards) >= 1.0]
+        trade_rewards_validation = validation_rewards[np.abs(validation_rewards) >= 1.0]
 
         print("\nTRAIN TRADES")
         print("-----------")
         print("Trades  :", len(trade_rewards_train))
         print("Win rate:", np.mean(trade_rewards_train > 0))
 
-        print("\nVAL TRADES")
+        print("\nTRAIN VAL TRADES")
         print("---------")
         print("Trades  :", len(trade_rewards_train_validation))
         print("Win rate:", np.mean(trade_rewards_train_validation > 0))
+
+
+        print("\nVAL TRADES")
+        print("---------")
+        print("Trades  :", len(trade_rewards_validation))
+        print("Win rate:", np.mean(trade_rewards_validation > 0))
 
 
 
@@ -482,56 +523,65 @@ class RMSNorm(tf.keras.layers.Layer):
 
 
 
+
 class sLSTM(tf.keras.layers.Layer):
     def __init__(self, dim, dropout=0.2, **kwargs):
         super().__init__(**kwargs)
         self.dim = dim
         self.dropout = tf.keras.layers.Dropout(dropout)
-        self.linear = tf.keras.layers.Dense(4 * dim, kernel_initializer='orthogonal') 
+        self.linear = tf.keras.layers.Dense(4 * dim, kernel_initializer="orthogonal")
         self.norm = RMSNorm(dim)
 
         self.input_bias = self.add_weight(
             shape=(dim,),
             initializer=tf.keras.initializers.Constant(-1.0),
-            trainable=True
+            trainable=True,
+            name="input_bias"
         )
 
     def call(self, x, training=False):
         B = tf.shape(x)[0]
         T = tf.shape(x)[1]
-        
-        c = tf.zeros((B, self.dim)) 
-        n = tf.zeros((B, self.dim)) 
-        m = tf.zeros((B, self.dim)) 
-        
-        # FIX: Use TensorArray instead of a Python list
-        outputs = tf.TensorArray(dtype=tf.float32, size=T, clear_after_read=True)
 
-        for t in tf.range(T):
+        c = tf.zeros((B, self.dim))
+        n = tf.zeros((B, self.dim))
+        m = tf.zeros((B, self.dim))
+
+        outputs = tf.TensorArray(dtype=tf.float32, size=T)
+
+        def step(t, c, n, m, outputs):
             xt = x[:, t, :]
-            
+
             i_pre, f_pre, o_pre, z = tf.split(self.linear(xt), 4, axis=-1)
 
             i = softcap(i_pre + self.input_bias)
             f = -tf.nn.softplus(f_pre)
-            
+
             m_next = tf.maximum(f + m, i)
             i_scaled = tf.exp(i - m_next)
             f_scaled = tf.exp(f + m - m_next)
-            
+
             c = f_scaled * c + i_scaled * tf.tanh(z)
             n = f_scaled * n + i_scaled
-            
+
             h = tf.nn.sigmoid(o_pre) * (c / (n + 1e-6))
-            
-            # FIX: Write to TensorArray
             outputs = outputs.write(t, h)
 
-        # FIX: Stack and transpose to (Batch, Time, Dim)
+            return t + 1, c, n, m_next, outputs
+
+        t0 = tf.constant(0)
+        _, _, _, _, outputs = tf.while_loop(
+            cond=lambda t, *_: t < T,
+            body=step,
+            loop_vars=(t0, c, n, m, outputs),
+            parallel_iterations=1
+        )
+
         out = tf.transpose(outputs.stack(), perm=[1, 0, 2])
-        
         out = self.norm(out)
         return self.dropout(out, training=training)
+
+
 
 
 
@@ -551,7 +601,8 @@ class mLSTM(tf.keras.layers.Layer):
         self.input_bias = self.add_weight(
             shape=(dim,),
             initializer=tf.keras.initializers.Constant(-1.0),
-            trainable=True
+            trainable=True,
+            name="input_bias"
         )
 
     def call(self, x, training=False):
@@ -560,26 +611,25 @@ class mLSTM(tf.keras.layers.Layer):
         D = self.dim
 
         M = tf.zeros((B, D, D))
-        n_vec = tf.zeros((B, D)) # Renamed to n_vec to avoid confusion with TensorArray 'n'
+        n_vec = tf.zeros((B, D))
         m_state = tf.zeros((B, D))
 
-        # FIX: Use TensorArray
-        outputs = tf.TensorArray(dtype=tf.float32, size=T, clear_after_read=True)
+        outputs = tf.TensorArray(tf.float32, size=T)
 
-        for t in tf.range(T):
+        def step(t, M, n_vec, m_state, outputs):
             xt = x[:, t, :]
 
-            q = self.q_proj(xt) 
+            q = self.q_proj(xt)
             k = self.k_proj(xt) / tf.sqrt(tf.cast(D, tf.float32))
             v = self.v_proj(xt)
 
             i_pre, f_pre, o_pre = tf.split(self.gate_proj(xt), 3, axis=-1)
-            
+
             log_i = softcap(i_pre + self.input_bias)
             log_f = -tf.nn.softplus(f_pre)
 
             m_next = tf.maximum(log_f + m_state, log_i)
-            
+
             i_scaled = tf.exp(log_i - m_next)
             f_scaled = tf.exp(log_f + m_state - m_next)
 
@@ -588,17 +638,28 @@ class mLSTM(tf.keras.layers.Layer):
             n_vec = f_scaled * n_vec + i_scaled * k
 
             h_raw = tf.einsum("bij,bj->bi", M, q)
-            denom = tf.maximum(tf.abs(tf.einsum("bi,bi->b", n_vec, q))[:, None], 1e-6)
+            denom = tf.maximum(
+                tf.abs(tf.einsum("bi,bi->b", n_vec, q))[:, None],
+                1e-6
+            )
+
             h = tf.nn.sigmoid(o_pre) * (h_raw / denom)
-
-            # FIX: Write to TensorArray
             outputs = outputs.write(t, h)
-            m_state = m_next # Update max-state for next step
 
-        # FIX: Stack and transpose
+            return t + 1, M, n_vec, m_next, outputs
+
+        t0 = tf.constant(0)
+        _, M, n_vec, m_state, outputs = tf.while_loop(
+            cond=lambda t, *_: t < T,
+            body=step,
+            loop_vars=(t0, M, n_vec, m_state, outputs),
+            parallel_iterations=1
+        )
+
         out = tf.transpose(outputs.stack(), perm=[1, 0, 2])
         out = self.norm(out)
         return self.dropout(out, training=training)
+
 
 
 
@@ -627,7 +688,7 @@ def build_xlstm_model(seq_len=64, n_features=25, dim=128):
     x = tf.keras.layers.Lambda(lambda t: t[:, -1, :])(x)
 
     # Optional: A small dense bottleneck for higher reasoning
-    x = tf.keras.layers.Dense(dim // 2, activation='gelu')(x)
+    x = tf.keras.layers.Dense(dim // 2, activation='gelu', name="embedding")(x)
     x = tf.keras.layers.Dropout(0.1)(x)
 
     # Output: 3 classes (0: Down, 1: Flat, 2: Up)
@@ -668,7 +729,7 @@ class FocalLoss(tf.keras.losses.Loss):
 
 
 class TripleBarrierTradingEnv(gym.Env):
-    def __init__(self, Z, close, high, low, atr, max_holding=60, spread_cost=0.05, tp_sl_mult = 3.0):
+    def __init__(self, Z, close, high, low, atr, max_holding=20, spread_cost=0.05, tp_sl_mult = 4.0):
         super().__init__()
 
         self.Z = Z.astype(np.float32)
@@ -782,7 +843,7 @@ def rollout_policy(model, env):
     rewards = []
     equity_curve = []
 
-    obs, info = env.reset()
+    obs, info = env.reset(seed = SEED)
     terminated = False
     truncated = False
 
@@ -811,4 +872,4 @@ def sharpe_ratio(returns, eps=1e-8):
 if __name__ == "__main__":
     pipeline = AlgoPipeline()
     #pipeline.calculate_features()
-    pipeline.fit(load_encoder= False, sequence_length=64)
+    pipeline.fit(load_encoder= True, load_model= False,sequence_length=32, batch_size = 256, validation_start= '2025-06-01', test_start = '2026-01-01')
