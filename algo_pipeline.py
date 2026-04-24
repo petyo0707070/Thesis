@@ -1,6 +1,5 @@
 import pandas as pd
 import numpy as np
-import pandas_ta as ta
 import pytz
 from datetime import time
 import matplotlib.pyplot as plt
@@ -210,7 +209,8 @@ class AlgoPipeline:
         print(self.df)
 
     def fit(self, name = 'btc_raw_features', train_start = '2023-01-01', validation_start = '2025-06-01', test_start = '2026-01-01', atr_multiplyer = 3, load_encoder = False, sequence_length = 32):
-        self.df = pd.read_csv(f'{name}.csv')
+        self.df = pd.read_csv('/home/petar/algo_trading/btc_raw_features.csv')
+        # self.df = pd.read_csv(f'{name}.csv')
         self.df.dropna(inplace = True)
         self.df.reset_index(inplace = True, drop = True)
         self.atr_multiplyer = atr_multiplyer
@@ -221,7 +221,7 @@ class AlgoPipeline:
         self.df["vol_96"] = (self.df["log_return(1)"].rolling(96).std())
 
         self.df['label'] = triple_barrier_labels(self.df, 24, self.atr_multiplyer)
-        #print(self.df['label'].value_counts(True))
+        print(self.df['label'].value_counts(True))
 
         df_train = self.df[ (self.df['date'] >= train_start) & (self.df['date'] < validation_start)]
         df_train_train = df_train[0:int(0.8 * len(df_train))]
@@ -265,7 +265,8 @@ class AlgoPipeline:
 
             encoder_model = build_xlstm_model(seq_len=sequence_length, n_features=self.X_train_train.shape[1])
 
-            encoder_model.compile( optimizer=tf.keras.optimizers.AdamW( learning_rate=3e-4,weight_decay=1e-4),loss=FocalLoss(gamma=2.0),metrics=["sparse_categorical_accuracy"])
+            lr_schedule = tf.keras.optimizers.schedules.CosineDecay(initial_learning_rate=1e-5, warmup_target=1e-3, warmup_steps=2000, decay_steps=len(train_train_sequence) * 12)
+            encoder_model.compile( optimizer=tf.keras.optimizers.AdamW( learning_rate=lr_schedule,weight_decay=1e-4),loss=FocalLoss(gamma=2.0),metrics=["sparse_categorical_accuracy"])
 
             encoder_model.summary()
             encoder_model.fit(train_train_sequence, epochs=12, validation_data=train_validation_sequence)
@@ -461,7 +462,7 @@ def make_dataset(X, y, seq_len=32, batch_size=64, shuffle=True):
 
 
 @tf.function
-def softcap(x, a=15.0):
+def softcap(x, a=10.0):
     return a * tf.tanh(x / a)
 
 
@@ -482,126 +483,157 @@ class RMSNorm(tf.keras.layers.Layer):
 
 
 class sLSTM(tf.keras.layers.Layer):
-    def __init__(self, dim, dropout=0.4, **kwargs):
+    def __init__(self, dim, dropout=0.2, **kwargs):
         super().__init__(**kwargs)
         self.dim = dim
         self.dropout = tf.keras.layers.Dropout(dropout)
-
-        self.linear = tf.keras.layers.Dense(3 * dim)
+        self.linear = tf.keras.layers.Dense(4 * dim, kernel_initializer='orthogonal') 
         self.norm = RMSNorm(dim)
 
-        # Skeptical input gate
         self.input_bias = self.add_weight(
             shape=(dim,),
-            initializer=tf.keras.initializers.Constant(-10.0),
+            initializer=tf.keras.initializers.Constant(-1.0),
             trainable=True
         )
 
     def call(self, x, training=False):
         B = tf.shape(x)[0]
-        h = tf.zeros((B, self.dim))
-        m = tf.zeros((B, self.dim))
+        T = tf.shape(x)[1]
+        
+        c = tf.zeros((B, self.dim)) 
+        n = tf.zeros((B, self.dim)) 
+        m = tf.zeros((B, self.dim)) 
+        
+        # FIX: Use TensorArray instead of a Python list
+        outputs = tf.TensorArray(dtype=tf.float32, size=T, clear_after_read=True)
 
-        outputs = []
-
-        for t in range(x.shape[1]):
+        for t in tf.range(T):
             xt = x[:, t, :]
-            i_pre, f_pre, o = tf.split(self.linear(xt), 3, axis=-1)
+            
+            i_pre, f_pre, o_pre, z = tf.split(self.linear(xt), 4, axis=-1)
 
-            i = tf.exp(softcap(i_pre + self.input_bias))
-            f = tf.exp(-tf.nn.softplus(f_pre))
+            i = softcap(i_pre + self.input_bias)
+            f = -tf.nn.softplus(f_pre)
+            
+            m_next = tf.maximum(f + m, i)
+            i_scaled = tf.exp(i - m_next)
+            f_scaled = tf.exp(f + m - m_next)
+            
+            c = f_scaled * c + i_scaled * tf.tanh(z)
+            n = f_scaled * n + i_scaled
+            
+            h = tf.nn.sigmoid(o_pre) * (c / (n + 1e-6))
+            
+            # FIX: Write to TensorArray
+            outputs = outputs.write(t, h)
 
-            m = f * m + i * xt
-            h = o * m
-            h = self.norm(h)
-
-            outputs.append(h)
-
-        out = tf.stack(outputs, axis=1)
+        # FIX: Stack and transpose to (Batch, Time, Dim)
+        out = tf.transpose(outputs.stack(), perm=[1, 0, 2])
+        
+        out = self.norm(out)
         return self.dropout(out, training=training)
 
 
 
 class mLSTM(tf.keras.layers.Layer):
-    def __init__(self, dim, dropout=0.4, **kwargs):
+    def __init__(self, dim, dropout=0.2, **kwargs):
         super().__init__(**kwargs)
         self.dim = dim
         self.dropout = tf.keras.layers.Dropout(dropout)
 
-        # Projections
         self.q_proj = tf.keras.layers.Dense(dim)
         self.k_proj = tf.keras.layers.Dense(dim)
         self.v_proj = tf.keras.layers.Dense(dim)
 
-        # Gates
         self.gate_proj = tf.keras.layers.Dense(3 * dim)
-
         self.norm = RMSNorm(dim)
 
-        # Skeptical input gate bias (same philosophy as sLSTM)
         self.input_bias = self.add_weight(
             shape=(dim,),
-            initializer=tf.keras.initializers.Constant(-5.0),
+            initializer=tf.keras.initializers.Constant(-1.0),
             trainable=True
         )
 
     def call(self, x, training=False):
-        """
-        x: (B, T, D)
-        """
         B = tf.shape(x)[0]
+        T = tf.shape(x)[1]
         D = self.dim
 
-        # Persistent matrix memory
         M = tf.zeros((B, D, D))
+        n_vec = tf.zeros((B, D)) # Renamed to n_vec to avoid confusion with TensorArray 'n'
+        m_state = tf.zeros((B, D))
 
-        outputs = []
+        # FIX: Use TensorArray
+        outputs = tf.TensorArray(dtype=tf.float32, size=T, clear_after_read=True)
 
-        for t in range(x.shape[1]):
+        for t in tf.range(T):
             xt = x[:, t, :]
 
-            q = self.q_proj(xt)   # (B, D)
-            k = self.k_proj(xt)
+            q = self.q_proj(xt) 
+            k = self.k_proj(xt) / tf.sqrt(tf.cast(D, tf.float32))
             v = self.v_proj(xt)
 
-            i_pre, f_pre, o = tf.split(self.gate_proj(xt), 3, axis=-1)
+            i_pre, f_pre, o_pre = tf.split(self.gate_proj(xt), 3, axis=-1)
+            
+            log_i = softcap(i_pre + self.input_bias)
+            log_f = -tf.nn.softplus(f_pre)
 
-            # Exponential gates with softcap
-            i = tf.exp(softcap(i_pre + self.input_bias))
-            f = tf.exp(-tf.nn.softplus(f_pre))
+            m_next = tf.maximum(log_f + m_state, log_i)
+            
+            i_scaled = tf.exp(log_i - m_next)
+            f_scaled = tf.exp(log_f + m_state - m_next)
 
-            # Outer product update: v ⊗ k
             vkT = tf.einsum("bi,bj->bij", v, k)
+            M = f_scaled[:, :, None] * M + i_scaled[:, :, None] * vkT
+            n_vec = f_scaled * n_vec + i_scaled * k
 
-            # Matrix memory update
-            M = f[:, :, None] * M + i[:, :, None] * vkT
+            h_raw = tf.einsum("bij,bj->bi", M, q)
+            denom = tf.maximum(tf.abs(tf.einsum("bi,bi->b", n_vec, q))[:, None], 1e-6)
+            h = tf.nn.sigmoid(o_pre) * (h_raw / denom)
 
-            # Read from memory: M @ q
-            h = tf.einsum("bij,bj->bi", M, q)
+            # FIX: Write to TensorArray
+            outputs = outputs.write(t, h)
+            m_state = m_next # Update max-state for next step
 
-            h = o * h
-            h = self.norm(h)
-
-            outputs.append(h)
-
-        out = tf.stack(outputs, axis=1)
+        # FIX: Stack and transpose
+        out = tf.transpose(outputs.stack(), perm=[1, 0, 2])
+        out = self.norm(out)
         return self.dropout(out, training=training)
 
 
 
-def build_xlstm_model(seq_len=32, n_features=25, dim=128):
+def build_xlstm_model(seq_len=64, n_features=25, dim=128):
     inputs = tf.keras.Input(shape=(seq_len, n_features))
 
+    # Initial projection to model dimension
     x = tf.keras.layers.Dense(dim)(inputs)
-    x = sLSTM(dim)(x)
-    x = mLSTM(dim)(x)
 
-    x = x[:, -1, :]
-    x = RMSNorm(dim)(x)
+    # --- Block 1: sLSTM (Scalar Memory) ---
+    # We use Pre-Norm: Norm -> Layer -> Add
+    res = x
+    x = tf.keras.layers.LayerNormalization()(x)
+    x = sLSTM(dim, dropout=0.2)(x)
+    x = tf.keras.layers.Add()([x, res])
 
-    outputs = tf.keras.layers.Dense(3)(x)
-    return tf.keras.Model(inputs, outputs)  
+    # --- Block 2: mLSTM (Matrix Memory) ---
+    res = x
+    x = tf.keras.layers.LayerNormalization()(x)
+    x = mLSTM(dim, dropout=0.2)(x)
+    x = tf.keras.layers.Add()([x, res])
 
+    # --- Feature Extraction ---
+    # Instead of Average Pooling, we take the last state (the "Now" bar)
+    # This is more reactive to immediate market triggers.
+    x = tf.keras.layers.Lambda(lambda t: t[:, -1, :])(x)
+
+    # Optional: A small dense bottleneck for higher reasoning
+    x = tf.keras.layers.Dense(dim // 2, activation='gelu')(x)
+    x = tf.keras.layers.Dropout(0.1)(x)
+
+    # Output: 3 classes (0: Down, 1: Flat, 2: Up)
+    outputs = tf.keras.layers.Dense(3)(x) 
+
+    return tf.keras.Model(inputs, outputs)
 
 
 class FocalLoss(tf.keras.losses.Loss):
@@ -779,4 +811,4 @@ def sharpe_ratio(returns, eps=1e-8):
 if __name__ == "__main__":
     pipeline = AlgoPipeline()
     #pipeline.calculate_features()
-    pipeline.fit(load_encoder= True)
+    pipeline.fit(load_encoder= False, sequence_length=64)
